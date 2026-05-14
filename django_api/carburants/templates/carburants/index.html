@@ -1,0 +1,74 @@
+{% extends "carburants/base.html" %}
+{% load carburants_tags %}
+{% block title %}Dashboard — EssencIel{% endblock %}
+{% block nav_index %}active{% endblock %}
+
+{% block content %}
+<h1>Prix des carburants — France entière</h1>
+
+<div class="fuel-tabs">
+  {% for key, label in fuels.items %}
+  <a href="?fuel={{ key }}" class="fuel-tab {% if selected_fuel == key %}active{% endif %}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-bottom:1.5rem">
+  <h2>Synthèse nationale (snapshot le plus récent)</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Carburant</th>
+        <th>Prix moyen (€/L)</th>
+        <th>Taux de rupture</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for key, label in fuels.items %}
+      <tr>
+        <td><strong>{{ label }}</strong></td>
+        <td>{{ stats|fuel_prix:key }}</td>
+        <td>{{ stats|fuel_rupture:key }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h2>Top 10 moins chers — {{ fuels|get_item:selected_fuel }}</h2>
+    <table>
+      <thead><tr><th>Adresse</th><th>Ville</th><th>Prix</th></tr></thead>
+      <tbody>
+        {% for s in top %}
+        <tr>
+          <td>{{ s.adresse }}</td>
+          <td>{{ s.ville }} ({{ s.code_postal }})</td>
+          <td><strong>{{ s.prix }} €</strong></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3">Aucune donnée</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Top 10 plus chers — {{ fuels|get_item:selected_fuel }}</h2>
+    <table>
+      <thead><tr><th>Adresse</th><th>Ville</th><th>Prix</th></tr></thead>
+      <tbody>
+        {% for s in worst %}
+        <tr>
+          <td>{{ s.adresse }}</td>
+          <td>{{ s.ville }} ({{ s.code_postal }})</td>
+          <td><strong>{{ s.prix }} €</strong></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="3">Aucune donnée</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

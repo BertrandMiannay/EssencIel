@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}EssencIel{% endblock %}</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #222; }
+    nav { background: #1a1a2e; color: white; padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 2rem; }
+    nav a { color: #ccc; text-decoration: none; font-size: 0.95rem; }
+    nav a:hover, nav a.active { color: white; }
+    nav .brand { font-size: 1.2rem; font-weight: 700; color: white; margin-right: auto; }
+    main { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: white; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    h2 { font-size: 1.1rem; margin-bottom: 0.75rem; color: #444; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #eee; color: #666; }
+    td { padding: 0.5rem; border-bottom: 1px solid #f0f0f0; }
+    tr:hover td { background: #fafafa; }
+    .fuel-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .fuel-tab { padding: 0.35rem 0.9rem; border-radius: 20px; border: 1px solid #ddd; background: white;
+                text-decoration: none; color: #555; font-size: 0.85rem; }
+    .fuel-tab.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    .badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; }
+    .badge-green { background: #d4edda; color: #155724; }
+    .badge-red { background: #f8d7da; color: #721c24; }
+    input, select, button { font-size: 0.9rem; padding: 0.4rem 0.75rem; border-radius: 6px; border: 1px solid #ccc; }
+    button { background: #1a1a2e; color: white; border: none; cursor: pointer; }
+    button:hover { background: #2a2a4e; }
+    .search-bar { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    @media (max-width: 700px) { .grid-2 { grid-template-columns: 1fr; } }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <nav>
+    <span class="brand">⛽ EssencIel</span>
+    <a href="{% url 'index' %}" class="{% block nav_index %}{% endblock %}">Dashboard</a>
+    <a href="{% url 'carte' %}" class="{% block nav_carte %}{% endblock %}">Carte</a>
+    <a href="{% url 'recherche' %}" class="{% block nav_recherche %}{% endblock %}">Recherche</a>
+  </nav>
+  <main>{% block content %}{% endblock %}</main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  {% block extra_scripts %}{% endblock %}
+</body>
+</html>

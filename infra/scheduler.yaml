@@ -1,0 +1,14 @@
+name: carburants-ingestion-daily
+description: "Déclenche la Cloud Function d'ingestion des prix carburants chaque jour à 6h"
+schedule: "0 6 * * *"
+timeZone: "Europe/Paris"
+httpTarget:
+  uri: ${CLOUD_FUNCTION_URL}
+  httpMethod: POST
+  oidcToken:
+    serviceAccountEmail: ${SERVICE_ACCOUNT_EMAIL}
+retryConfig:
+  retryCount: 3
+  minBackoffDuration: 5s
+  maxBackoffDuration: 3600s
+  maxDoublings: 5
