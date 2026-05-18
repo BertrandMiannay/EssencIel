@@ -115,7 +115,7 @@ def upload_to_gcs(content: bytes, date_str: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def _bq_schema() -> list[bigquery.SchemaField]:
-    schema_path = Path(__file__).parent.parent / "bigquery" / "schema.json"
+    schema_path = Path(__file__).parent / "bigquery" / "schema.json"
     return [
         bigquery.SchemaField(f["name"], f["type"], mode=f.get("mode", "NULLABLE"))
         for f in json.loads(schema_path.read_text())
