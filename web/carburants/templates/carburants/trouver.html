@@ -1,0 +1,285 @@
+{% extends "carburants/base.html" %}
+{% block title %}Trouver une station — EssencIel{% endblock %}
+{% block nav_trouver %}active{% endblock %}
+
+{% block extra_head %}
+<style>
+  .search-panel { display: flex; flex-direction: column; gap: 1rem; }
+  .addr-wrapper { position: relative; flex: 1; min-width: 260px; }
+  #addrInput { width: 100%; padding: 0.5rem 0.75rem; font-size: 0.95rem;
+               border: 1px solid #ccc; border-radius: 6px; }
+  #suggestions { position: absolute; top: 100%; left: 0; right: 0; background: white;
+                 border: 1px solid #ddd; border-top: none; border-radius: 0 0 6px 6px;
+                 z-index: 1000; max-height: 220px; overflow-y: auto; display: none; }
+  .suggestion { padding: 0.5rem 0.75rem; cursor: pointer; font-size: 0.88rem; }
+  .suggestion:hover { background: #f0f4ff; }
+  .row-controls { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+  select { padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid #ccc; font-size: 0.9rem; }
+  .btn-geo { background: none; border: 1px solid #1a1a2e; color: #1a1a2e; border-radius: 6px;
+             padding: 0.45rem 0.9rem; cursor: pointer; font-size: 0.85rem; display: flex;
+             align-items: center; gap: 0.4rem; }
+  .btn-geo:hover { background: #f0f4ff; }
+  #map { height: 380px; border-radius: 8px; margin-top: 1.25rem; display: none; }
+  #status { color: #666; font-size: 0.88rem; margin-top: 0.5rem; min-height: 1.2em; }
+  .result-row td { vertical-align: middle; }
+  .dist-badge { display: inline-block; background: #eef2ff; color: #3730a3;
+                padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.78rem; }
+  .prix-cell { font-weight: 700; font-size: 1.05rem; color: #15803d; }
+  .prix-cell.cher { color: #b91c1c; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Trouver une station près de moi</h1>
+
+<div class="card" style="margin-bottom:1.5rem">
+  <div class="search-panel">
+    <div class="row-controls">
+      <div class="addr-wrapper">
+        <input id="addrInput" type="text" placeholder="Saisissez votre adresse…" autocomplete="off">
+        <div id="suggestions"></div>
+      </div>
+      <button class="btn-geo" onclick="geolocate()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>
+        </svg>
+        Ma position
+      </button>
+    </div>
+
+    <div class="row-controls">
+      <label style="font-size:0.88rem;color:#555">Carburant :</label>
+      <select id="fuelSelect">
+        {% for key, label in fuels.items %}
+        <option value="{{ key }}" {% if key == "gazole" %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <label style="font-size:0.88rem;color:#555">Rayon :</label>
+      <select id="rayonSelect">
+        <option value="10">10 km</option>
+        <option value="20" selected>20 km</option>
+        <option value="40">40 km</option>
+        <option value="80">80 km</option>
+      </select>
+      <button id="searchBtn" onclick="search()" disabled>Rechercher</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
+</div>
+
+<div id="resultsSection" style="display:none">
+  <div class="grid-2" style="margin-bottom:1.5rem">
+    <div class="card">
+      <h2 id="resultsTitle">Résultats</h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Distance</th>
+              <th>Adresse</th>
+              <th>Ville</th>
+              <th>Prix</th>
+              <th>Services</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div id="map"></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+let selectedLat = null;
+let selectedLng = null;
+let map = null;
+let markers = [];
+let debounceTimer = null;
+
+const addrInput = document.getElementById('addrInput');
+const suggestions = document.getElementById('suggestions');
+const searchBtn = document.getElementById('searchBtn');
+const status = document.getElementById('status');
+
+addrInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  const q = addrInput.value.trim();
+  if (q.length < 3) { suggestions.style.display = 'none'; return; }
+  debounceTimer = setTimeout(() => fetchSuggestions(q), 280);
+});
+
+addrInput.addEventListener('blur', () => {
+  setTimeout(() => { suggestions.style.display = 'none'; }, 150);
+});
+
+async function fetchSuggestions(q) {
+  const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(q)}&limit=6&autocomplete=1`;
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    renderSuggestions(data.features || []);
+  } catch { suggestions.style.display = 'none'; }
+}
+
+function renderSuggestions(features) {
+  if (!features.length) { suggestions.style.display = 'none'; return; }
+  suggestions.innerHTML = features.map(f => {
+    const [lng, lat] = f.geometry.coordinates;
+    return `<div class="suggestion" data-lat="${lat}" data-lng="${lng}" data-label="${f.properties.label}">
+      ${f.properties.label}
+    </div>`;
+  }).join('');
+  suggestions.querySelectorAll('.suggestion').forEach(el => {
+    el.addEventListener('click', () => {
+      setLocation(parseFloat(el.dataset.lat), parseFloat(el.dataset.lng), el.dataset.label);
+      suggestions.style.display = 'none';
+    });
+  });
+  suggestions.style.display = 'block';
+}
+
+function setLocation(lat, lng, label) {
+  selectedLat = lat;
+  selectedLng = lng;
+  addrInput.value = label;
+  searchBtn.disabled = false;
+  setStatus('');
+}
+
+function geolocate() {
+  if (!navigator.geolocation) {
+    setStatus('Géolocalisation non supportée par ce navigateur.');
+    return;
+  }
+  setStatus('Localisation en cours…');
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      setLocation(pos.coords.latitude, pos.coords.longitude, 'Ma position');
+      setStatus('Position détectée. Cliquez sur Rechercher.');
+    },
+    () => setStatus('Impossible d\'obtenir la position. Vérifiez les permissions.')
+  );
+}
+
+async function search() {
+  if (!selectedLat || !selectedLng) return;
+  const fuel = document.getElementById('fuelSelect').value;
+  const rayon = document.getElementById('rayonSelect').value;
+
+  setStatus('Recherche en cours…');
+  searchBtn.disabled = true;
+
+  try {
+    const url = `/api/stations-proches/?lat=${selectedLat}&lng=${selectedLng}&fuel=${fuel}&rayon=${rayon}&limit=30`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('Erreur serveur');
+    const stations = await resp.json();
+    renderResults(stations, fuel);
+  } catch (e) {
+    setStatus('Erreur lors de la recherche. Veuillez réessayer.');
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+function renderResults(stations, fuel) {
+  const section = document.getElementById('resultsSection');
+  const tbody = document.getElementById('resultsBody');
+  const title = document.getElementById('resultsTitle');
+  const mapDiv = document.getElementById('map');
+
+  const fuelLabel = document.getElementById('fuelSelect').options[document.getElementById('fuelSelect').selectedIndex].text;
+  title.textContent = `${stations.length} station${stations.length > 1 ? 's' : ''} — ${fuelLabel}`;
+
+  if (!stations.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:#666;padding:1rem">Aucune station trouvée dans ce rayon.</td></tr>';
+    section.style.display = 'block';
+    setStatus('');
+    return;
+  }
+
+  const prices = stations.map(s => s.prix).filter(Boolean);
+  const minPrice = prices.reduce((a, b) => a < b ? a : b, Infinity);
+  const maxPrice = prices.reduce((a, b) => a > b ? a : b, -Infinity);
+
+  const annotated = stations.map(s => ({
+    ...s,
+    isMin: s.prix === minPrice,
+    isMax: s.prix === maxPrice,
+    services: (s.services || '').split('|').filter(Boolean).slice(0, 3).join(', ') || '—',
+  }));
+
+  tbody.innerHTML = annotated.map((s, i) => {
+    const priceClass = s.isMax ? 'prix-cell cher' : 'prix-cell';
+    return `<tr class="result-row" data-idx="${i}" style="cursor:pointer" onclick="focusMarker(${i})">
+      <td><span class="dist-badge">${s.distance_km} km</span></td>
+      <td>${s.adresse}</td>
+      <td>${s.ville}<br><small style="color:#888">${s.code_postal}</small></td>
+      <td><span class="${priceClass}">${s.prix} €</span></td>
+      <td><small>${s.services}</small></td>
+    </tr>`;
+  }).join('');
+
+  section.style.display = 'block';
+  setStatus('');
+
+  mapDiv.style.display = 'block';
+  initOrResetMap();
+
+  markers = [];
+  const bounds = [];
+
+  L.circleMarker([selectedLat, selectedLng], {
+    radius: 8, color: '#1a1a2e', fillColor: '#1a1a2e', fillOpacity: 0.9, weight: 2,
+  }).bindPopup('<strong>Votre position</strong>').addTo(map);
+  bounds.push([selectedLat, selectedLng]);
+
+  annotated.forEach((s, i) => {
+    if (!s.latitude || !s.longitude) return;
+    const color = s.isMin ? '#16a34a' : s.isMax ? '#dc2626' : '#2563eb';
+    const m = L.circleMarker([s.latitude, s.longitude], {
+      radius: 7, color, fillColor: color, fillOpacity: 0.85, weight: 1.5,
+    });
+    m.bindPopup(`
+      <strong>${s.adresse}</strong><br>
+      ${s.ville} ${s.code_postal}<br>
+      <strong style="color:${color}">${fuel.toUpperCase()} : ${s.prix} €/L</strong>
+      <br><small>${s.distance_km} km — ${s.services}</small>
+    `);
+    m.addTo(map);
+    markers.push(m);
+    bounds.push([s.latitude, s.longitude]);
+  });
+
+  if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30] });
+}
+
+function focusMarker(idx) {
+  const m = markers[idx];
+  if (!m) return;
+  map.setView(m.getLatLng(), 14);
+  m.openPopup();
+}
+
+function initOrResetMap() {
+  if (map) {
+    map.remove();
+    map = null;
+  }
+  map = L.map('map').setView([selectedLat, selectedLng], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap', maxZoom: 18,
+  }).addTo(map);
+}
+
+function setStatus(msg) {
+  status.textContent = msg;
+}
+</script>
+{% endblock %}

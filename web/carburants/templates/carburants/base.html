@@ -14,7 +14,7 @@
     nav .brand { font-size: 1.2rem; font-weight: 700; color: white; margin-right: auto; }
     main { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; }
     .card { background: white; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; line-height: 1.2; }
     h2 { font-size: 1.1rem; margin-bottom: 0.75rem; color: #444; }
     table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
     th { text-align: left; padding: 0.5rem; border-bottom: 2px solid #eee; color: #666; }
@@ -40,6 +40,7 @@
   <nav>
     <span class="brand">⛽ EssencIel</span>
     <a href="{% url 'index' %}" class="{% block nav_index %}{% endblock %}">Dashboard</a>
+    <a href="{% url 'trouver' %}" class="{% block nav_trouver %}{% endblock %}">Trouver</a>
     <a href="{% url 'carte' %}" class="{% block nav_carte %}{% endblock %}">Carte</a>
     <a href="{% url 'recherche' %}" class="{% block nav_recherche %}{% endblock %}">Recherche</a>
   </nav>

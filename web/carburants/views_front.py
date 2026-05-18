@@ -1,5 +1,8 @@
 from django.shortcuts import render
+from django.core.cache import cache
 from . import queries
+
+_CACHE_TTL = 3600  # 1 heure — données ingérées quotidiennement
 
 FUELS = queries.FUELS
 FUEL_LABELS = {
@@ -17,12 +20,14 @@ def index(request):
     if fuel not in FUELS:
         fuel = "gazole"
 
-    stats = queries.prix_moyen_par_zone("france")
-    top = queries.top_prix(fuel, "france", None, limit=10, order="ASC")
-    worst = queries.top_prix(fuel, "france", None, limit=10, order="DESC")
+    stats = cache.get_or_set("dashboard:stats", lambda: queries.prix_moyen_par_zone("france"), _CACHE_TTL)
+    top = cache.get_or_set(f"dashboard:top:{fuel}", lambda: queries.top_prix(fuel, "france", None, limit=10, order="ASC"), _CACHE_TTL)
+    worst = cache.get_or_set(f"dashboard:worst:{fuel}", lambda: queries.top_prix(fuel, "france", None, limit=10, order="DESC"), _CACHE_TTL)
 
+    stats_row = stats[0] if stats else {}
     return render(request, "carburants/index.html", {
-        "stats": stats[0] if stats else {},
+        "stats": stats_row,
+        "last_date": stats_row.get("last_date"),
         "top": top,
         "worst": worst,
         "fuels": FUEL_LABELS,
@@ -42,6 +47,12 @@ def carte(request):
         "selected_fuel": fuel,
         "region": region,
         "departement": departement,
+    })
+
+
+def trouver(request):
+    return render(request, "carburants/trouver.html", {
+        "fuels": FUEL_LABELS,
     })
 
 

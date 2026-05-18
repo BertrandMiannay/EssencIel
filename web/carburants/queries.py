@@ -29,6 +29,7 @@ def prix_moyen_par_zone(zone_type: str, zone_value: str | None = None) -> list[d
       FROM `{table_ref()}`
     )
     SELECT
+      MAX(last_date) AS last_date,
       {fuel_avg},
       {fuel_rupture},
       COUNT(*) AS nb_stations
@@ -141,6 +142,48 @@ def stations_carte(region: str | None = None, departement: str | None = None, fu
     return [dict(row) for row in job.result()]
 
 
+def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, limit: int = 20) -> list[dict]:
+    """Stations dans un rayon donné, triées par prix croissant pour le carburant demandé."""
+    sql = f"""
+    WITH latest AS (
+      SELECT DATE(MAX(ingested_at)) AS last_date
+      FROM `{table_ref()}`
+    )
+    SELECT
+      station_id, adresse, ville, code_postal, departement, region,
+      latitude, longitude, services,
+      {fuel}_prix AS prix,
+      {fuel}_rupture AS rupture,
+      ROUND(ST_DISTANCE(
+        ST_GEOGPOINT(longitude, latitude),
+        ST_GEOGPOINT(@lng, @lat)
+      ) / 1000, 1) AS distance_km
+    FROM `{table_ref()}`, latest
+    WHERE DATE(ingested_at) = last_date
+      AND {fuel}_prix IS NOT NULL
+      AND {fuel}_rupture IS FALSE
+      AND latitude IS NOT NULL
+      AND longitude IS NOT NULL
+      AND ST_DWITHIN(
+        ST_GEOGPOINT(longitude, latitude),
+        ST_GEOGPOINT(@lng, @lat),
+        @rayon_meters
+      )
+    ORDER BY {fuel}_prix ASC
+    LIMIT @limit
+    """
+
+    params = [
+        _float_param("lat", lat),
+        _float_param("lng", lng),
+        _float_param("rayon_meters", rayon_km * 1000),
+        _int_param("limit", limit),
+    ]
+
+    job = get_client().query(sql, job_config=_job_config(params))
+    return [dict(row) for row in job.result()]
+
+
 # --- helpers ---
 
 def _str_param(name: str, value: str):
@@ -151,6 +194,11 @@ def _str_param(name: str, value: str):
 def _int_param(name: str, value: int):
     from google.cloud.bigquery import ScalarQueryParameter, enums
     return ScalarQueryParameter(name, enums.SqlTypeNames.INT64, value)
+
+
+def _float_param(name: str, value: float):
+    from google.cloud.bigquery import ScalarQueryParameter, enums
+    return ScalarQueryParameter(name, enums.SqlTypeNames.FLOAT64, value)
 
 
 def _job_config(params: list):

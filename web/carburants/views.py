@@ -49,15 +49,11 @@ def top_prix(request):
 @api_view(["GET"])
 def worst_prix(request):
     """GET /api/worst-prix/?fuel=gazole&zone_type=france"""
-    request.query_params._mutable = True if hasattr(request.query_params, '_mutable') else None
-    params = request.query_params.copy()
-    params["order"] = "DESC"
-    request._request.GET = params
-    fuel = params.get("fuel", "gazole")
-    zone_type = params.get("zone_type", "france")
-    zone_value = params.get("zone_value")
+    fuel = request.query_params.get("fuel", "gazole")
+    zone_type = request.query_params.get("zone_type", "france")
+    zone_value = request.query_params.get("zone_value")
     try:
-        limit = min(int(params.get("limit", 10)), 50)
+        limit = min(int(request.query_params.get("limit", 10)), 50)
     except ValueError:
         limit = 10
 
@@ -82,6 +78,35 @@ def recherche_service(request):
         limit = 50
 
     data = queries.recherche_par_service(service, code_postal, limit=limit)
+    return Response(data)
+
+
+@api_view(["GET"])
+def stations_proches(request):
+    """
+    GET /api/stations-proches/?lat=48.85&lng=2.35&fuel=gazole&rayon=20&limit=20
+    """
+    try:
+        lat = float(request.query_params["lat"])
+        lng = float(request.query_params["lng"])
+    except (KeyError, ValueError, TypeError):
+        return Response({"error": "lat and lng are required numeric parameters"}, status=status.HTTP_400_BAD_REQUEST)
+
+    fuel = request.query_params.get("fuel", "gazole")
+    if fuel not in VALID_FUELS:
+        fuel = "gazole"
+
+    try:
+        rayon = min(float(request.query_params.get("rayon", 20)), 100)
+    except ValueError:
+        rayon = 20
+
+    try:
+        limit = min(int(request.query_params.get("limit", 20)), 50)
+    except ValueError:
+        limit = 20
+
+    data = queries.stations_proches(lat, lng, fuel, rayon_km=rayon, limit=limit)
     return Response(data)
 
 
