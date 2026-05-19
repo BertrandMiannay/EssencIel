@@ -1,5 +1,10 @@
 """BigQuery queries — toutes les fonctions retournent des listes de dicts."""
+import logging
+import time
+
 from .bq_client import get_client, table_ref, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref
+
+logger = logging.getLogger("carburants.bq")
 
 FUELS = ["gazole", "sp95", "sp98", "e10", "e85", "gplc"]
 
@@ -29,15 +34,13 @@ def prix_moyen_par_zone(zone_type: str, zone_value: str | None = None) -> list[d
         _str_param("zone_value", zone_value if zone_value else ""),
     ]
 
-    job = get_client().query(sql, job_config=_job_config(params))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, params, "prix_moyen_par_zone")
 
 
 def synthese_nationale() -> list[dict]:
     """Synthèse nationale (prix min/max/moy, taux rupture par carburant), depuis la table gold."""
     sql = f"SELECT * FROM `{gold_synthese_table_ref()}` LIMIT 1"
-    job = get_client().query(sql, job_config=_job_config([]))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, [], "synthese_nationale")
 
 
 def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10, order: str = "ASC") -> list[dict]:
@@ -63,8 +66,7 @@ def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10,
     if zone_value:
         params.append(_str_param("zone_value", zone_value))
 
-    job = get_client().query(sql, job_config=_job_config(params))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, params, "top_prix")
 
 
 def recherche_par_service(service: str, code_postal: str | None = None, limit: int = 50) -> list[dict]:
@@ -87,8 +89,7 @@ def recherche_par_service(service: str, code_postal: str | None = None, limit: i
     if code_postal:
         params.append(_str_param("code_postal", code_postal))
 
-    job = get_client().query(sql, job_config=_job_config(params))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, params, "recherche_par_service")
 
 
 def stations_carte(region: str | None = None, departement: str | None = None, fuel: str | None = None) -> list[dict]:
@@ -117,8 +118,7 @@ def stations_carte(region: str | None = None, departement: str | None = None, fu
     ORDER BY {fuel_col} ASC
     """
 
-    job = get_client().query(sql, job_config=_job_config(params))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, params, "stations_carte")
 
 
 def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, limit: int = 20) -> list[dict]:
@@ -154,11 +154,18 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
         _int_param("limit", limit),
     ]
 
-    job = get_client().query(sql, job_config=_job_config(params))
-    return [dict(row) for row in job.result()]
+    return _run_query(sql, params, "stations_proches")
 
 
 # --- helpers ---
+
+def _run_query(sql: str, params: list, label: str) -> list[dict]:
+    t0 = time.monotonic()
+    job = get_client().query(sql, job_config=_job_config(params))
+    rows = [dict(row) for row in job.result()]
+    logger.info("query=%s rows=%d duration_ms=%d", label, len(rows), round((time.monotonic() - t0) * 1000))
+    return rows
+
 
 def _str_param(name: str, value: str):
     from google.cloud.bigquery import ScalarQueryParameter, enums
