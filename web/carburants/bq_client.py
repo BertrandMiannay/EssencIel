@@ -10,3 +10,15 @@ def get_client() -> bigquery.Client:
 
 def table_ref() -> str:
     return f"{settings.GCP_PROJECT}.{settings.BQ_DATASET}.{settings.BQ_TABLE}"
+
+
+def silver_table_ref() -> str:
+    return f"{settings.GCP_PROJECT}.{settings.BQ_DATASET}.stations_latest"
+
+
+def gold_zone_table_ref() -> str:
+    return f"{settings.GCP_PROJECT}.{settings.BQ_DATASET}.prix_moyens_zone"
+
+
+def gold_synthese_table_ref() -> str:
+    return f"{settings.GCP_PROJECT}.{settings.BQ_DATASET}.nationale_synthese"

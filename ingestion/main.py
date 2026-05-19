@@ -29,6 +29,9 @@ GCS_BUCKET = os.environ.get("GCS_BUCKET")
 BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
 BQ_TABLE = os.environ.get("BQ_TABLE", "snapshots")
 BQ_LOG_TABLE = f"{GCP_PROJECT}.{BQ_DATASET}.ingestion_log"
+BQ_SILVER = f"{GCP_PROJECT}.{BQ_DATASET}.stations_latest"
+BQ_GOLD_ZONE = f"{GCP_PROJECT}.{BQ_DATASET}.prix_moyens_zone"
+BQ_GOLD_SYNTHESE = f"{GCP_PROJECT}.{BQ_DATASET}.nationale_synthese"
 
 # (bq_prefix, csv_prix_label, csv_rupture_label)
 FUEL_MAP = [
@@ -122,6 +125,81 @@ def _bq_schema() -> list[bigquery.SchemaField]:
     ]
 
 
+def _log_schema() -> list[bigquery.SchemaField]:
+    return [
+        bigquery.SchemaField("file_md5",    "STRING",    mode="REQUIRED"),
+        bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("rows_count",  "INT64",     mode="NULLABLE"),
+        bigquery.SchemaField("gcs_uri",     "STRING",    mode="NULLABLE"),
+    ]
+
+
+def _gold_zone_schema() -> list[bigquery.SchemaField]:
+    fields = [
+        bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("zone_type",   "STRING",    mode="REQUIRED"),
+        bigquery.SchemaField("zone_value",  "STRING",    mode="REQUIRED"),
+        bigquery.SchemaField("nb_stations", "INT64",     mode="NULLABLE"),
+    ]
+    for bq_prefix, *_ in FUEL_MAP:
+        fields += [
+            bigquery.SchemaField(f"{bq_prefix}_prix_moyen",   "FLOAT64", mode="NULLABLE"),
+            bigquery.SchemaField(f"{bq_prefix}_taux_rupture", "FLOAT64", mode="NULLABLE"),
+        ]
+    return fields
+
+
+def _gold_synthese_schema() -> list[bigquery.SchemaField]:
+    fields = [
+        bigquery.SchemaField("ingested_at",       "TIMESTAMP", mode="REQUIRED"),
+        bigquery.SchemaField("nb_stations_total", "INT64",     mode="NULLABLE"),
+    ]
+    for bq_prefix, *_ in FUEL_MAP:
+        fields += [
+            bigquery.SchemaField(f"{bq_prefix}_prix_moyen",   "FLOAT64", mode="NULLABLE"),
+            bigquery.SchemaField(f"{bq_prefix}_prix_min",     "FLOAT64", mode="NULLABLE"),
+            bigquery.SchemaField(f"{bq_prefix}_prix_max",     "FLOAT64", mode="NULLABLE"),
+            bigquery.SchemaField(f"{bq_prefix}_taux_rupture", "FLOAT64", mode="NULLABLE"),
+            bigquery.SchemaField(f"{bq_prefix}_nb_stations",  "INT64",   mode="NULLABLE"),
+        ]
+    return fields
+
+
+def _ensure_table(
+    client: bigquery.Client,
+    table_name: str,
+    schema: list[bigquery.SchemaField],
+    partition_field: str | None = None,
+    cluster: list[str] | None = None,
+) -> None:
+    table = bigquery.Table(f"{GCP_PROJECT}.{BQ_DATASET}.{table_name}", schema=schema)
+    if partition_field:
+        table.time_partitioning = bigquery.TimePartitioning(
+            type_=bigquery.TimePartitioningType.DAY,
+            field=partition_field,
+        )
+    if cluster:
+        table.clustering_fields = cluster
+    client.create_table(table, exists_ok=True)
+    logger.info("Table %s.%s OK", BQ_DATASET, table_name)
+
+
+def ensure_infrastructure(client: bigquery.Client) -> None:
+    ds = bigquery.Dataset(f"{GCP_PROJECT}.{BQ_DATASET}")
+    ds.location = "EU"
+    client.create_dataset(ds, exists_ok=True)
+    logger.info("Dataset %s OK", BQ_DATASET)
+
+    _ensure_table(client, BQ_TABLE, _bq_schema(),
+                  partition_field="ingested_at", cluster=["region", "code_postal"])
+    _ensure_table(client, "ingestion_log", _log_schema())
+    _ensure_table(client, "stations_latest", _bq_schema(),
+                  cluster=["region", "code_postal"])
+    _ensure_table(client, "prix_moyens_zone", _gold_zone_schema(),
+                  cluster=["zone_type", "zone_value"])
+    _ensure_table(client, "nationale_synthese", _gold_synthese_schema())
+
+
 def _md5(content: bytes) -> str:
     return hashlib.md5(content).hexdigest()
 
@@ -147,7 +225,7 @@ def _record_ingestion(client: bigquery.Client, file_md5: str, ingested_at: str, 
         raise RuntimeError(f"ingestion_log insert errors: {errors}")
 
 
-def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) -> int:
+def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) -> tuple[list[dict], int]:
     t0 = time.perf_counter()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), delimiter=";")
     rows = [_transform_row(row, ingested_at) for row in reader]
@@ -188,7 +266,92 @@ def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) 
 
     client.delete_table(staging_table)
     logger.info("Durée totale BQ : %.1fs", time.perf_counter() - t0)
-    return len(rows)
+    return rows, len(rows)
+
+
+def _refresh_silver(client: bigquery.Client, rows: list[dict]) -> None:
+    t0 = time.perf_counter()
+    job = client.load_table_from_json(
+        rows,
+        BQ_SILVER,
+        job_config=bigquery.LoadJobConfig(
+            schema=_bq_schema(),
+            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        ),
+    )
+    job.result()
+    logger.info("Silver stations_latest : %d lignes en %.1fs", len(rows), time.perf_counter() - t0)
+
+
+def _fuel_zone_agg(fuel: str) -> str:
+    return (
+        f"ROUND(AVG(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_moyen"
+        f", ROUND(COUNTIF({fuel}_rupture IS TRUE) / COUNT(*), 4) AS {fuel}_taux_rupture"
+    )
+
+
+def _fuel_synthese_agg(fuel: str) -> str:
+    return (
+        f"ROUND(AVG(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_moyen"
+        f", ROUND(MIN(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_min"
+        f", ROUND(MAX(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_max"
+        f", ROUND(COUNTIF({fuel}_rupture IS TRUE) / COUNT(*), 4) AS {fuel}_taux_rupture"
+        f", COUNTIF({fuel}_prix IS NOT NULL) AS {fuel}_nb_stations"
+    )
+
+
+def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
+    t0 = time.perf_counter()
+    fuels = [bq_prefix for bq_prefix, *_ in FUEL_MAP]
+    ts_param = bigquery.ScalarQueryParameter("ingested_at", "TIMESTAMP", ingested_at)
+
+    fuel_zone_cols = ", ".join(_fuel_zone_agg(f) for f in fuels)
+
+    prix_moyens_sql = f"""
+    SELECT @ingested_at AS ingested_at, 'france' AS zone_type, '' AS zone_value,
+      COUNT(*) AS nb_stations, {fuel_zone_cols}
+    FROM `{BQ_SILVER}`
+
+    UNION ALL
+
+    SELECT @ingested_at, 'region', region, COUNT(*), {fuel_zone_cols}
+    FROM `{BQ_SILVER}` WHERE region IS NOT NULL GROUP BY region
+
+    UNION ALL
+
+    SELECT @ingested_at, 'departement', departement, COUNT(*), {fuel_zone_cols}
+    FROM `{BQ_SILVER}` WHERE departement IS NOT NULL GROUP BY departement
+
+    UNION ALL
+
+    SELECT @ingested_at, 'code_postal', code_postal, COUNT(*), {fuel_zone_cols}
+    FROM `{BQ_SILVER}` WHERE code_postal IS NOT NULL GROUP BY code_postal
+    """
+
+    client.query(prix_moyens_sql, job_config=bigquery.QueryJobConfig(
+        destination=BQ_GOLD_ZONE,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        query_parameters=[ts_param],
+    )).result()
+    logger.info("Gold prix_moyens_zone OK en %.1fs", time.perf_counter() - t0)
+
+    t1 = time.perf_counter()
+    fuel_synthese_cols = ", ".join(_fuel_synthese_agg(f) for f in fuels)
+
+    synthese_sql = f"""
+    SELECT
+      @ingested_at AS ingested_at,
+      COUNT(*) AS nb_stations_total,
+      {fuel_synthese_cols}
+    FROM `{BQ_SILVER}`
+    """
+
+    client.query(synthese_sql, job_config=bigquery.QueryJobConfig(
+        destination=BQ_GOLD_SYNTHESE,
+        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
+        query_parameters=[ts_param],
+    )).result()
+    logger.info("Gold nationale_synthese OK en %.1fs", time.perf_counter() - t1)
 
 
 def ingest(request=None):
@@ -205,6 +368,7 @@ def ingest(request=None):
     logger.info("MD5 : %s", file_md5)
 
     client = bigquery.Client(project=GCP_PROJECT)
+    ensure_infrastructure(client)
 
     if _already_ingested(client, file_md5):
         logger.info("Déjà ingéré (MD5 %s) — skip", file_md5)
@@ -216,8 +380,11 @@ def ingest(request=None):
     else:
         logger.warning("GCS_BUCKET non défini — upload GCS ignoré")
 
-    count = load_to_bigquery(client, content, ingested_at)
+    rows, count = load_to_bigquery(client, content, ingested_at)
     _record_ingestion(client, file_md5, ingested_at, count, gcs_uri)
+
+    _refresh_silver(client, rows)
+    _refresh_gold(client, ingested_at)
 
     elapsed = time.perf_counter() - t_start
     logger.info("=== Ingestion terminée : %d lignes en %.1fs ===", count, elapsed)

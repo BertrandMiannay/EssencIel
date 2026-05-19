@@ -1,5 +1,5 @@
 """BigQuery queries — toutes les fonctions retournent des listes de dicts."""
-from .bq_client import get_client, table_ref
+from .bq_client import get_client, table_ref, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref
 
 FUELS = ["gazole", "sp95", "sp98", "e10", "e85", "gplc"]
 
@@ -12,58 +12,47 @@ _ZONE_FILTER = {
 
 
 def prix_moyen_par_zone(zone_type: str, zone_value: str | None = None) -> list[dict]:
-    """Prix moyen et taux de rupture par carburant pour une zone donnée, snapshot le plus récent."""
-    fuel_avg = ", ".join(
-        f"ROUND(AVG(IF({f}_rupture IS FALSE AND {f}_prix IS NOT NULL, {f}_prix, NULL)), 3) AS {f}_prix_moyen"
-        for f in FUELS
-    )
-    fuel_rupture = ", ".join(
-        f"ROUND(COUNTIF({f}_rupture IS TRUE) / COUNT(*), 4) AS {f}_taux_rupture"
-        for f in FUELS
-    )
-    zone_filter = _ZONE_FILTER.get(zone_type, "")
-
+    """Prix moyen et taux de rupture par carburant pour une zone donnée, depuis la table gold."""
     sql = f"""
-    WITH latest AS (
-      SELECT DATE(MAX(ingested_at)) AS last_date
-      FROM `{table_ref()}`
-    )
     SELECT
-      MAX(last_date) AS last_date,
-      {fuel_avg},
-      {fuel_rupture},
-      COUNT(*) AS nb_stations
-    FROM `{table_ref()}`, latest
-    WHERE DATE(ingested_at) = last_date
-      {zone_filter}
+      ingested_at AS last_date,
+      nb_stations,
+      {", ".join(f"{f}_prix_moyen, {f}_taux_rupture" for f in FUELS)}
+    FROM `{gold_zone_table_ref()}`
+    WHERE zone_type = @zone_type
+      AND zone_value = @zone_value
+    LIMIT 1
     """
 
-    params = []
-    if zone_value:
-        params.append(_str_param("zone_value", zone_value))
+    params = [
+        _str_param("zone_type", zone_type),
+        _str_param("zone_value", zone_value if zone_value else ""),
+    ]
 
     job = get_client().query(sql, job_config=_job_config(params))
     return [dict(row) for row in job.result()]
 
 
+def synthese_nationale() -> list[dict]:
+    """Synthèse nationale (prix min/max/moy, taux rupture par carburant), depuis la table gold."""
+    sql = f"SELECT * FROM `{gold_synthese_table_ref()}` LIMIT 1"
+    job = get_client().query(sql, job_config=_job_config([]))
+    return [dict(row) for row in job.result()]
+
+
 def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10, order: str = "ASC") -> list[dict]:
-    """Top ou worst stations par prix pour un carburant donné."""
+    """Top ou worst stations par prix pour un carburant donné, depuis la table silver."""
     zone_filter = _ZONE_FILTER.get(zone_type, "")
     order = "ASC" if order.upper() == "ASC" else "DESC"
 
     sql = f"""
-    WITH latest AS (
-      SELECT DATE(MAX(ingested_at)) AS last_date
-      FROM `{table_ref()}`
-    )
     SELECT
       station_id, adresse, ville, code_postal, departement, region,
       latitude, longitude,
       {fuel}_prix AS prix,
       {fuel}_rupture AS rupture
-    FROM `{table_ref()}`, latest
-    WHERE DATE(ingested_at) = last_date
-      AND {fuel}_prix IS NOT NULL
+    FROM `{silver_table_ref()}`
+    WHERE {fuel}_prix IS NOT NULL
       AND {fuel}_rupture IS FALSE
       {zone_filter}
     ORDER BY {fuel}_prix {order}
@@ -79,21 +68,16 @@ def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10,
 
 
 def recherche_par_service(service: str, code_postal: str | None = None, limit: int = 50) -> list[dict]:
-    """Stations proposant un service donné, optionnellement filtrées par code postal."""
+    """Stations proposant un service donné, depuis la table silver."""
     cp_filter = "AND code_postal = @code_postal" if code_postal else ""
 
     sql = f"""
-    WITH latest AS (
-      SELECT DATE(MAX(ingested_at)) AS last_date
-      FROM `{table_ref()}`
-    )
     SELECT
       station_id, adresse, ville, code_postal, departement, region,
       latitude, longitude, services, horaires,
       gazole_prix, sp95_prix, sp98_prix, e10_prix, e85_prix, gplc_prix
-    FROM `{table_ref()}`, latest
-    WHERE DATE(ingested_at) = last_date
-      AND LOWER(services) LIKE CONCAT('%', LOWER(@service), '%')
+    FROM `{silver_table_ref()}`
+    WHERE LOWER(services) LIKE CONCAT('%', LOWER(@service), '%')
       {cp_filter}
     ORDER BY region, ville
     LIMIT @limit
@@ -108,7 +92,7 @@ def recherche_par_service(service: str, code_postal: str | None = None, limit: i
 
 
 def stations_carte(region: str | None = None, departement: str | None = None, fuel: str | None = None) -> list[dict]:
-    """Retourne les stations avec coordonnées GPS et prix pour la carte."""
+    """Retourne les stations avec coordonnées GPS et prix pour la carte, depuis la table silver."""
     filters = []
     params = []
 
@@ -122,17 +106,12 @@ def stations_carte(region: str | None = None, departement: str | None = None, fu
     fuel_col = f"{fuel}_prix" if fuel in FUELS else "gazole_prix"
 
     sql = f"""
-    WITH latest AS (
-      SELECT DATE(MAX(ingested_at)) AS last_date
-      FROM `{table_ref()}`
-    )
     SELECT
       station_id, adresse, ville, code_postal, region,
       latitude, longitude, services,
       gazole_prix, sp95_prix, sp98_prix, e10_prix, e85_prix, gplc_prix
-    FROM `{table_ref()}`, latest
-    WHERE DATE(ingested_at) = last_date
-      AND latitude IS NOT NULL
+    FROM `{silver_table_ref()}`
+    WHERE latitude IS NOT NULL
       AND longitude IS NOT NULL
       {"".join(filters)}
     ORDER BY {fuel_col} ASC
@@ -143,12 +122,8 @@ def stations_carte(region: str | None = None, departement: str | None = None, fu
 
 
 def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, limit: int = 20) -> list[dict]:
-    """Stations dans un rayon donné, triées par prix croissant pour le carburant demandé."""
+    """Stations dans un rayon donné, triées par prix croissant, depuis la table silver."""
     sql = f"""
-    WITH latest AS (
-      SELECT DATE(MAX(ingested_at)) AS last_date
-      FROM `{table_ref()}`
-    )
     SELECT
       station_id, adresse, ville, code_postal, departement, region,
       latitude, longitude, services,
@@ -158,9 +133,8 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
         ST_GEOGPOINT(longitude, latitude),
         ST_GEOGPOINT(@lng, @lat)
       ) / 1000, 1) AS distance_km
-    FROM `{table_ref()}`, latest
-    WHERE DATE(ingested_at) = last_date
-      AND {fuel}_prix IS NOT NULL
+    FROM `{silver_table_ref()}`
+    WHERE {fuel}_prix IS NOT NULL
       AND {fuel}_rupture IS FALSE
       AND latitude IS NOT NULL
       AND longitude IS NOT NULL
