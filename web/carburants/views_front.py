@@ -2,7 +2,7 @@ from django.shortcuts import render
 from django.core.cache import cache
 from . import queries
 
-_CACHE_TTL = 3600  # 1 heure — données ingérées quotidiennement
+_CACHE_TTL = 3600  # données ingérées quotidiennement
 
 _SERVICES_COMMUNS = [
     "Lavage", "Gonflage", "Boutique", "Restauration",
@@ -10,6 +10,57 @@ _SERVICES_COMMUNS = [
 ]
 
 FUELS = queries.FUELS
+VALID_ZONE_TYPES = ("france", "region", "departement")
+
+REGIONS = [
+    "Auvergne-Rhône-Alpes",
+    "Bourgogne-Franche-Comté",
+    "Bretagne",
+    "Centre-Val de Loire",
+    "Corse",
+    "Grand Est",
+    "Guadeloupe",
+    "Guyane",
+    "Hauts-de-France",
+    "Île-de-France",
+    "La Réunion",
+    "Martinique",
+    "Mayotte",
+    "Normandie",
+    "Nouvelle-Aquitaine",
+    "Occitanie",
+    "Pays de la Loire",
+    "Provence-Alpes-Côte d'Azur",
+]
+
+DEPARTEMENTS = [
+    ("01", "Ain"), ("02", "Aisne"), ("03", "Allier"), ("04", "Alpes-de-Haute-Provence"),
+    ("05", "Hautes-Alpes"), ("06", "Alpes-Maritimes"), ("07", "Ardèche"), ("08", "Ardennes"),
+    ("09", "Ariège"), ("10", "Aube"), ("11", "Aude"), ("12", "Aveyron"),
+    ("13", "Bouches-du-Rhône"), ("14", "Calvados"), ("15", "Cantal"), ("16", "Charente"),
+    ("17", "Charente-Maritime"), ("18", "Cher"), ("19", "Corrèze"), ("2A", "Corse-du-Sud"),
+    ("2B", "Haute-Corse"), ("21", "Côte-d'Or"), ("22", "Côtes-d'Armor"), ("23", "Creuse"),
+    ("24", "Dordogne"), ("25", "Doubs"), ("26", "Drôme"), ("27", "Eure"),
+    ("28", "Eure-et-Loir"), ("29", "Finistère"), ("30", "Gard"), ("31", "Haute-Garonne"),
+    ("32", "Gers"), ("33", "Gironde"), ("34", "Hérault"), ("35", "Ille-et-Vilaine"),
+    ("36", "Indre"), ("37", "Indre-et-Loire"), ("38", "Isère"), ("39", "Jura"),
+    ("40", "Landes"), ("41", "Loir-et-Cher"), ("42", "Loire"), ("43", "Haute-Loire"),
+    ("44", "Loire-Atlantique"), ("45", "Loiret"), ("46", "Lot"), ("47", "Lot-et-Garonne"),
+    ("48", "Lozère"), ("49", "Maine-et-Loire"), ("50", "Manche"), ("51", "Marne"),
+    ("52", "Haute-Marne"), ("53", "Mayenne"), ("54", "Meurthe-et-Moselle"), ("55", "Meuse"),
+    ("56", "Morbihan"), ("57", "Moselle"), ("58", "Nièvre"), ("59", "Nord"),
+    ("60", "Oise"), ("61", "Orne"), ("62", "Pas-de-Calais"), ("63", "Puy-de-Dôme"),
+    ("64", "Pyrénées-Atlantiques"), ("65", "Hautes-Pyrénées"), ("66", "Pyrénées-Orientales"),
+    ("67", "Bas-Rhin"), ("68", "Haut-Rhin"), ("69", "Rhône"), ("70", "Haute-Saône"),
+    ("71", "Saône-et-Loire"), ("72", "Sarthe"), ("73", "Savoie"), ("74", "Haute-Savoie"),
+    ("75", "Paris"), ("76", "Seine-Maritime"), ("77", "Seine-et-Marne"), ("78", "Yvelines"),
+    ("79", "Deux-Sèvres"), ("80", "Somme"), ("81", "Tarn"), ("82", "Tarn-et-Garonne"),
+    ("83", "Var"), ("84", "Vaucluse"), ("85", "Vendée"), ("86", "Vienne"),
+    ("87", "Haute-Vienne"), ("88", "Vosges"), ("89", "Yonne"), ("90", "Territoire de Belfort"),
+    ("91", "Essonne"), ("92", "Hauts-de-Seine"), ("93", "Seine-Saint-Denis"), ("94", "Val-de-Marne"),
+    ("95", "Val-d'Oise"), ("971", "Guadeloupe"), ("972", "Martinique"), ("973", "Guyane"),
+    ("974", "La Réunion"), ("976", "Mayotte"),
+]
 FUEL_LABELS = {
     "gazole": "Gazole",
     "sp95": "SP95",
@@ -22,20 +73,36 @@ FUEL_LABELS = {
 
 def index(request):
     fuel = request.GET.get("fuel", "gazole")
+    zone_type = request.GET.get("zone_type", "france")
+    zone_value = request.GET.get("zone_value", "").strip()
+
     if fuel not in FUELS:
         fuel = "gazole"
+    if zone_type not in VALID_ZONE_TYPES:
+        zone_type = "france"
 
-    stats = cache.get_or_set("dashboard:stats", lambda: queries.prix_moyen_par_zone("france"), _CACHE_TTL)
-    top = cache.get_or_set(f"dashboard:top:{fuel}", lambda: queries.top_prix(fuel, "france", None, limit=10, order="ASC"), _CACHE_TTL)
-    worst = cache.get_or_set(f"dashboard:worst:{fuel}", lambda: queries.top_prix(fuel, "france", None, limit=10, order="DESC"), _CACHE_TTL)
+    stats = cache.get_or_set(
+        f"dashboard:stats:{zone_type}:{zone_value}",
+        lambda: queries.prix_moyen_par_zone(zone_type, zone_value or None),
+        _CACHE_TTL,
+    )
+    top_worst = cache.get_or_set(
+        f"dashboard:topworst:{fuel}:{zone_type}:{zone_value}",
+        lambda: queries.top_worst_gold(fuel, zone_type, zone_value or None),
+        _CACHE_TTL,
+    )
 
     stats_row = stats[0] if stats else {}
     return render(request, "carburants/index.html", {
         "stats": stats_row,
-        "top": top,
-        "worst": worst,
+        "top": top_worst.get("top", []),
+        "worst": top_worst.get("worst", []),
         "fuels": FUEL_LABELS,
         "selected_fuel": fuel,
+        "zone_type": zone_type,
+        "zone_value": zone_value,
+        "regions": REGIONS,
+        "departements": DEPARTEMENTS,
     })
 
 

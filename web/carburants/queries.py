@@ -3,7 +3,7 @@ import logging
 import time
 
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter, enums
-from .bq_client import get_client, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref
+from .bq_client import get_client, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref, gold_top_table_ref
 
 logger = logging.getLogger("carburants.bq")
 
@@ -68,6 +68,29 @@ def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10,
         params.append(_str_param("zone_value", zone_value))
 
     return _run_query(sql, params, "top_prix")
+
+
+def top_worst_gold(fuel: str, zone_type: str, zone_value: str | None) -> dict:
+    """Top et worst stations depuis la table gold, retourne {'top': [...], 'worst': [...]}."""
+    sql = f"""
+    SELECT rank_type, rank, station_id, adresse, ville, code_postal,
+           departement, region, latitude, longitude, prix
+    FROM `{gold_top_table_ref()}`
+    WHERE zone_type = @zone_type
+      AND zone_value = @zone_value
+      AND fuel = @fuel
+    ORDER BY rank_type, rank
+    """
+    params = [
+        _str_param("zone_type", zone_type),
+        _str_param("zone_value", zone_value or ""),
+        _str_param("fuel", fuel),
+    ]
+    rows = _run_query(sql, params, "top_worst_gold")
+    result: dict = {"top": [], "worst": []}
+    for row in rows:
+        result[row["rank_type"]].append(row)
+    return result
 
 
 def recherche_par_service(service: str, code_postal: str | None = None, limit: int = 50) -> list[dict]:

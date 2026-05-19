@@ -32,6 +32,7 @@ BQ_LOG_TABLE = f"{GCP_PROJECT}.{BQ_DATASET}.ingestion_log"
 BQ_SILVER = f"{GCP_PROJECT}.{BQ_DATASET}.stations_latest"
 BQ_GOLD_ZONE = f"{GCP_PROJECT}.{BQ_DATASET}.prix_moyens_zone"
 BQ_GOLD_SYNTHESE = f"{GCP_PROJECT}.{BQ_DATASET}.nationale_synthese"
+BQ_GOLD_TOP = f"{GCP_PROJECT}.{BQ_DATASET}.gold_top_stations"
 
 # (bq_prefix, csv_prix_label, csv_rupture_label)
 FUEL_MAP = [
@@ -152,6 +153,25 @@ def _gold_zone_schema() -> list[bigquery.SchemaField]:
     return fields
 
 
+def _gold_top_schema() -> list[bigquery.SchemaField]:
+    return [
+        bigquery.SchemaField("zone_type",   "STRING",  mode="REQUIRED"),
+        bigquery.SchemaField("zone_value",  "STRING",  mode="REQUIRED"),
+        bigquery.SchemaField("fuel",        "STRING",  mode="REQUIRED"),
+        bigquery.SchemaField("rank_type",   "STRING",  mode="REQUIRED"),
+        bigquery.SchemaField("rank",        "INT64",   mode="REQUIRED"),
+        bigquery.SchemaField("station_id",  "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("adresse",     "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("ville",       "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("code_postal", "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("departement", "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("region",      "STRING",  mode="NULLABLE"),
+        bigquery.SchemaField("latitude",    "FLOAT64", mode="NULLABLE"),
+        bigquery.SchemaField("longitude",   "FLOAT64", mode="NULLABLE"),
+        bigquery.SchemaField("prix",        "FLOAT64", mode="NULLABLE"),
+    ]
+
+
 def _gold_synthese_schema() -> list[bigquery.SchemaField]:
     fields = [
         bigquery.SchemaField("ingested_at",       "TIMESTAMP", mode="REQUIRED"),
@@ -201,6 +221,8 @@ def ensure_infrastructure(client: bigquery.Client) -> None:
     _ensure_table(client, "prix_moyens_zone", _gold_zone_schema(),
                   cluster=["zone_type", "zone_value"])
     _ensure_table(client, "nationale_synthese", _gold_synthese_schema())
+    _ensure_table(client, "gold_top_stations", _gold_top_schema(),
+                  cluster=["zone_type", "zone_value", "fuel"])
 
 
 def _md5(content: bytes) -> str:
@@ -355,6 +377,48 @@ def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
         query_parameters=[ts_param],
     )).result()
     logger.info("Gold nationale_synthese OK en %.1fs", time.perf_counter() - t1)
+
+    t2 = time.perf_counter()
+    station_cols = "station_id, adresse, ville, code_postal, departement, region, latitude, longitude"
+
+    client.query(f"TRUNCATE TABLE `{BQ_GOLD_TOP}`").result()
+
+    jobs = []
+    for fuel in fuels:
+        sql = f"""
+        WITH base AS (
+          SELECT {station_cols}, {fuel}_prix AS prix
+          FROM `{BQ_SILVER}`
+          WHERE {fuel}_prix IS NOT NULL AND {fuel}_rupture IS FALSE
+        ),
+        zones AS (
+          SELECT {station_cols}, prix, 'france' AS zone_type, '' AS zone_value FROM base
+          UNION ALL
+          SELECT {station_cols}, prix, 'region', region FROM base WHERE region IS NOT NULL
+          UNION ALL
+          SELECT {station_cols}, prix, 'departement', departement FROM base WHERE departement IS NOT NULL
+        ),
+        ranked AS (
+          SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY zone_type, zone_value ORDER BY prix ASC)  AS rn_asc,
+            ROW_NUMBER() OVER (PARTITION BY zone_type, zone_value ORDER BY prix DESC) AS rn_desc
+          FROM zones
+        )
+        SELECT zone_type, zone_value, '{fuel}' AS fuel, 'top' AS rank_type, rn_asc AS rank, {station_cols}, prix
+        FROM ranked WHERE rn_asc <= 10
+        UNION ALL
+        SELECT zone_type, zone_value, '{fuel}', 'worst', rn_desc, {station_cols}, prix
+        FROM ranked WHERE rn_desc <= 10
+        """
+        jobs.append(client.query(sql, job_config=bigquery.QueryJobConfig(
+            destination=BQ_GOLD_TOP,
+            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        )))
+
+    for job in jobs:
+        job.result()
+
+    logger.info("Gold top_stations OK en %.1fs", time.perf_counter() - t2)
 
 
 def ingest(request=None):

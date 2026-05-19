@@ -5,7 +5,10 @@
 
 {% block content %}
 <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:1rem;">
-  <h1 style="margin-bottom:0">Prix des carburants — France entière</h1>
+  <h1 style="margin-bottom:0">
+    Prix des carburants —
+    {% if zone_type == "france" %}France entière{% else %}{{ zone_value }}{% endif %}
+  </h1>
   {% if stats.last_date %}
   <span style="display:inline-flex; align-items:center; gap:0.35rem; font-size:0.82rem; color:#888;">
     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -20,9 +23,33 @@
   {% endif %}
 </div>
 
+<form method="get" class="search-bar" style="margin-bottom:0.75rem">
+  <input type="hidden" name="fuel" value="{{ selected_fuel }}">
+  <select name="zone_type" id="zone_type" onchange="onZoneTypeChange()">
+    <option value="france" {% if zone_type == "france" %}selected{% endif %}>France entière</option>
+    <option value="region" {% if zone_type == "region" %}selected{% endif %}>Région</option>
+    <option value="departement" {% if zone_type == "departement" %}selected{% endif %}>Département</option>
+  </select>
+  <select name="zone_value" id="zv_region" {% if zone_type != "region" %}disabled style="display:none"{% endif %}>
+    {% for r in regions %}
+    <option value="{{ r }}" {% if zone_type == "region" and zone_value == r %}selected{% endif %}>{{ r }}</option>
+    {% endfor %}
+  </select>
+  <select name="zone_value" id="zv_dept" {% if zone_type != "departement" %}disabled style="display:none"{% endif %}>
+    {% for code, name in departements %}
+    <option value="{{ name }}" {% if zone_type == "departement" and zone_value == name %}selected{% endif %}>{{ code }} — {{ name }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Filtrer</button>
+  {% if zone_type != "france" %}
+  <a href="?fuel={{ selected_fuel }}" style="align-self:center; font-size:0.85rem; color:#888;">Réinitialiser</a>
+  {% endif %}
+</form>
+
 <div class="fuel-tabs">
   {% for key, label in fuels.items %}
-  <a href="?fuel={{ key }}" class="fuel-tab {% if selected_fuel == key %}active{% endif %}">{{ label }}</a>
+  <a href="?fuel={{ key }}&zone_type={{ zone_type }}&zone_value={{ zone_value }}"
+     class="fuel-tab {% if selected_fuel == key %}active{% endif %}">{{ label }}</a>
   {% endfor %}
 </div>
 
@@ -85,4 +112,18 @@
     </table>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function onZoneTypeChange() {
+  const type   = document.getElementById('zone_type').value;
+  const region = document.getElementById('zv_region');
+  const dept   = document.getElementById('zv_dept');
+  region.disabled = type !== 'region';
+  region.style.display = type === 'region' ? '' : 'none';
+  dept.disabled = type !== 'departement';
+  dept.style.display = type === 'departement' ? '' : 'none';
+}
+</script>
 {% endblock %}

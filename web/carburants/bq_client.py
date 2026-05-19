@@ -26,3 +26,7 @@ def gold_zone_table_ref() -> str:
 
 def gold_synthese_table_ref() -> str:
     return _ref("nationale_synthese")
+
+
+def gold_top_table_ref() -> str:
+    return _ref("gold_top_stations")
