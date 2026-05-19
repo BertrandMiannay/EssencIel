@@ -81,8 +81,11 @@ def _transform_row(row: dict, ingested_at: str) -> dict:
     for csv_col, bq_col in CSV_TO_BQ.items():
         record[bq_col] = row.get(csv_col, "").strip() or None
 
-    record["latitude"] = _parse_float(row.get("latitude", ""))
-    record["longitude"] = _parse_float(row.get("longitude", ""))
+    lat_raw = _parse_float(row.get("latitude", ""))
+    lng_raw = _parse_float(row.get("longitude", ""))
+    # The API stores coordinates as integers × 100 000 (e.g. 4620516 → 46.20516°)
+    record["latitude"] = lat_raw / 100_000 if lat_raw is not None else None
+    record["longitude"] = lng_raw / 100_000 if lng_raw is not None else None
     # pop: "R" = route, "A" = autoroute
     record["autoroute"] = row.get("pop", "").strip() == "A"
 
