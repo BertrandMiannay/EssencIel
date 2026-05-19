@@ -65,26 +65,6 @@ def worst_prix(request):
 
 
 @api_view(["GET"])
-def recherche_service(request):
-    """
-    GET /api/services/?service=lavage
-    GET /api/services/?service=lavage&code_postal=75001
-    """
-    service = request.query_params.get("service", "").strip()
-    if not service:
-        return Response({"error": "service parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-    code_postal = request.query_params.get("code_postal")
-    try:
-        limit = min(int(request.query_params.get("limit", 50)), 200)
-    except ValueError:
-        limit = 50
-
-    data = queries.recherche_par_service(service, code_postal, limit=limit)
-    return Response(data)
-
-
-@api_view(["GET"])
 def stations_proches(request):
     """
     GET /api/stations-proches/?lat=48.85&lng=2.35&fuel=gazole&rayon=20&limit=20
@@ -110,21 +90,4 @@ def stations_proches(request):
         limit = 20
 
     data = queries.stations_proches(lat, lng, fuel, rayon_km=rayon, limit=limit)
-    return Response(data)
-
-
-@api_view(["GET"])
-def stations_carte(request):
-    """
-    GET /api/carte/?fuel=gazole
-    GET /api/carte/?fuel=gazole&region=Bretagne
-    """
-    fuel = request.query_params.get("fuel", "gazole")
-    region = request.query_params.get("region")
-    departement = request.query_params.get("departement")
-
-    if fuel not in VALID_FUELS:
-        fuel = "gazole"
-
-    data = queries.stations_carte(region=region, departement=departement, fuel=fuel)
     return Response(data)

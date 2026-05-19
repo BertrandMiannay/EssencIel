@@ -4,11 +4,6 @@ from . import queries
 
 _CACHE_TTL = 3600  # données ingérées quotidiennement
 
-_SERVICES_COMMUNS = [
-    "Lavage", "Gonflage", "Boutique", "Restauration",
-    "DAB", "Toilettes", "WiFi", "Automate 24/24",
-]
-
 FUELS = queries.FUELS
 VALID_ZONE_TYPES = ("france", "region", "departement")
 
@@ -106,21 +101,6 @@ def index(request):
     })
 
 
-def carte(request):
-    fuel = request.GET.get("fuel", "gazole")
-    region = request.GET.get("region", "")
-    departement = request.GET.get("departement", "")
-    if fuel not in FUELS:
-        fuel = "gazole"
-
-    return render(request, "carburants/carte.html", {
-        "fuels": FUEL_LABELS,
-        "selected_fuel": fuel,
-        "region": region,
-        "departement": departement,
-    })
-
-
 def trouver(request):
     return render(request, "carburants/trouver.html", {
         "fuels": FUEL_LABELS,
@@ -144,20 +124,4 @@ def evolution(request):
         "zone_type": zone_type,
         "zone_value": zone_value,
         "periode": periode,
-    })
-
-
-def recherche(request):
-    service = request.GET.get("service", "").strip()
-    code_postal = request.GET.get("code_postal", "").strip()
-    results = []
-
-    if service:
-        results = queries.recherche_par_service(service, code_postal or None, limit=100)
-
-    return render(request, "carburants/recherche.html", {
-        "results": results,
-        "service": service,
-        "code_postal": code_postal,
-        "services_communs": _SERVICES_COMMUNS,
     })

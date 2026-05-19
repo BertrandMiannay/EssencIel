@@ -38,12 +38,6 @@ def prix_moyen_par_zone(zone_type: str, zone_value: str | None = None) -> list[d
     return _run_query(sql, params, "prix_moyen_par_zone")
 
 
-def synthese_nationale() -> list[dict]:
-    """Synthèse nationale (prix min/max/moy, taux rupture par carburant), depuis la table gold."""
-    sql = f"SELECT * FROM `{gold_synthese_table_ref()}` LIMIT 1"
-    return _run_query(sql, [], "synthese_nationale")
-
-
 def top_prix(fuel: str, zone_type: str, zone_value: str | None, limit: int = 10, order: str = "ASC") -> list[dict]:
     """Top ou worst stations par prix pour un carburant donné, depuis la table silver."""
     zone_filter = _ZONE_FILTER.get(zone_type, "")
@@ -91,58 +85,6 @@ def top_worst_gold(fuel: str, zone_type: str, zone_value: str | None) -> dict:
     for row in rows:
         result[row["rank_type"]].append(row)
     return result
-
-
-def recherche_par_service(service: str, code_postal: str | None = None, limit: int = 50) -> list[dict]:
-    """Stations proposant un service donné, depuis la table silver."""
-    cp_filter = "AND code_postal = @code_postal" if code_postal else ""
-
-    sql = f"""
-    SELECT
-      station_id, adresse, ville, code_postal, departement, region,
-      latitude, longitude, services, horaires,
-      gazole_prix, sp95_prix, sp98_prix, e10_prix, e85_prix, gplc_prix
-    FROM `{silver_table_ref()}`
-    WHERE LOWER(services) LIKE CONCAT('%', LOWER(@service), '%')
-      {cp_filter}
-    ORDER BY region, ville
-    LIMIT @limit
-    """
-
-    params = [_str_param("service", service), _int_param("limit", limit)]
-    if code_postal:
-        params.append(_str_param("code_postal", code_postal))
-
-    return _run_query(sql, params, "recherche_par_service")
-
-
-def stations_carte(region: str | None = None, departement: str | None = None, fuel: str | None = None) -> list[dict]:
-    """Retourne les stations avec coordonnées GPS et prix pour la carte, depuis la table silver."""
-    filters = []
-    params = []
-
-    if region:
-        filters.append("AND region = @region")
-        params.append(_str_param("region", region))
-    if departement:
-        filters.append("AND departement = @departement")
-        params.append(_str_param("departement", departement))
-
-    fuel_col = f"{fuel}_prix" if fuel in FUELS else "gazole_prix"
-
-    sql = f"""
-    SELECT
-      station_id, adresse, ville, code_postal, region,
-      latitude, longitude, services,
-      gazole_prix, sp95_prix, sp98_prix, e10_prix, e85_prix, gplc_prix
-    FROM `{silver_table_ref()}`
-    WHERE latitude IS NOT NULL
-      AND longitude IS NOT NULL
-      {"".join(filters)}
-    ORDER BY {fuel_col} ASC
-    """
-
-    return _run_query(sql, params, "stations_carte")
 
 
 def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, limit: int = 20) -> list[dict]:
