@@ -13,7 +13,8 @@ class RequestLoggingMiddleware:
         response = self.get_response(request)
         duration_ms = round((time.monotonic() - start) * 1000)
 
-        qs = f"?{request.META['QUERY_STRING']}" if request.META.get("QUERY_STRING") else ""
+        raw_qs = request.META.get("QUERY_STRING", "")
+        qs = f"?{raw_qs}" if raw_qs else ""
         ip = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", "-"))
         logger.info(
             "%s %s%s → %d (%dms) [%s]",

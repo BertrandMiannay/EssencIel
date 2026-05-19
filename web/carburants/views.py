@@ -57,6 +57,9 @@ def worst_prix(request):
     except ValueError:
         limit = 10
 
+    if fuel not in VALID_FUELS:
+        return Response({"error": f"fuel must be one of {VALID_FUELS}"}, status=status.HTTP_400_BAD_REQUEST)
+
     data = queries.top_prix(fuel, zone_type, zone_value, limit=limit, order="DESC")
     return Response(data)
 

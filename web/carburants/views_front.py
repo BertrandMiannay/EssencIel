@@ -4,6 +4,11 @@ from . import queries
 
 _CACHE_TTL = 3600  # 1 heure — données ingérées quotidiennement
 
+_SERVICES_COMMUNS = [
+    "Lavage", "Gonflage", "Boutique", "Restauration",
+    "DAB", "Toilettes", "WiFi", "Automate 24/24",
+]
+
 FUELS = queries.FUELS
 FUEL_LABELS = {
     "gazole": "Gazole",
@@ -27,7 +32,6 @@ def index(request):
     stats_row = stats[0] if stats else {}
     return render(request, "carburants/index.html", {
         "stats": stats_row,
-        "last_date": stats_row.get("last_date"),
         "top": top,
         "worst": worst,
         "fuels": FUEL_LABELS,
@@ -61,7 +65,7 @@ def evolution(request):
     zone_value = request.GET.get("zone_value", "").strip()
     periode = request.GET.get("periode", "7j")
 
-    valid_zones = ("france", "region", "departement", "ville")
+    valid_zones = ("france", "region", "departement", "code_postal")
     valid_periodes = ("24h", "7j", "30j")
     if zone_type not in valid_zones:
         zone_type = "france"
@@ -84,14 +88,9 @@ def recherche(request):
     if service:
         results = queries.recherche_par_service(service, code_postal or None, limit=100)
 
-    services_communs = [
-        "Lavage", "Gonflage", "Boutique", "Restauration",
-        "DAB", "Toilettes", "WiFi", "Automate 24/24",
-    ]
-
     return render(request, "carburants/recherche.html", {
         "results": results,
         "service": service,
         "code_postal": code_postal,
-        "services_communs": services_communs,
+        "services_communs": _SERVICES_COMMUNS,
     })

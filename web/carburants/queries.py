@@ -2,7 +2,8 @@
 import logging
 import time
 
-from .bq_client import get_client, table_ref, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref
+from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter, enums
+from .bq_client import get_client, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref
 
 logger = logging.getLogger("carburants.bq")
 
@@ -161,29 +162,19 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
 
 def _run_query(sql: str, params: list, label: str) -> list[dict]:
     t0 = time.monotonic()
-    job = get_client().query(sql, job_config=_job_config(params))
+    job = get_client().query(sql, job_config=QueryJobConfig(query_parameters=params))
     rows = [dict(row) for row in job.result()]
     logger.info("query=%s rows=%d duration_ms=%d", label, len(rows), round((time.monotonic() - t0) * 1000))
     return rows
 
 
 def _str_param(name: str, value: str):
-    from google.cloud.bigquery import ScalarQueryParameter, enums
     return ScalarQueryParameter(name, enums.SqlTypeNames.STRING, value)
 
 
 def _int_param(name: str, value: int):
-    from google.cloud.bigquery import ScalarQueryParameter, enums
     return ScalarQueryParameter(name, enums.SqlTypeNames.INT64, value)
 
 
 def _float_param(name: str, value: float):
-    from google.cloud.bigquery import ScalarQueryParameter, enums
     return ScalarQueryParameter(name, enums.SqlTypeNames.FLOAT64, value)
-
-
-def _job_config(params: list):
-    from google.cloud.bigquery import QueryJobConfig
-    cfg = QueryJobConfig()
-    cfg.query_parameters = params
-    return cfg
