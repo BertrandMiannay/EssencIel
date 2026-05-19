@@ -26,6 +26,10 @@
                 padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.78rem; }
   .prix-cell { font-weight: 700; font-size: 1.05rem; color: #15803d; }
   .prix-cell.cher { color: #b91c1c; }
+  .sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  .sortable:hover { background: #f0f4ff; }
+  .sort-icon { margin-left: 0.3em; color: #9ca3af; font-size: 0.75em; }
+  .sort-icon.active { color: #3730a3; }
 </style>
 {% endblock %}
 
@@ -56,10 +60,10 @@
       </select>
       <label style="font-size:0.88rem;color:#555">Rayon :</label>
       <select id="rayonSelect">
-        <option value="10">10 km</option>
-        <option value="20" selected>20 km</option>
-        <option value="40">40 km</option>
-        <option value="80">80 km</option>
+        <option value="5">5 km</option>
+        <option value="10" selected>10 km</option>
+        <option value="25">25 km</option>
+        <option value="50">50 km</option>
       </select>
       <button id="searchBtn" onclick="search()" disabled>Rechercher</button>
     </div>
@@ -76,10 +80,10 @@
         <table>
           <thead>
             <tr>
-              <th>Distance</th>
-              <th>Adresse</th>
-              <th>Ville</th>
-              <th>Prix</th>
+              <th class="sortable" onclick="sortBy('distance_km')">Distance <span class="sort-icon" id="icon-distance_km">⇅</span></th>
+              <th class="sortable" onclick="sortBy('adresse')">Adresse <span class="sort-icon" id="icon-adresse">⇅</span></th>
+              <th class="sortable" onclick="sortBy('ville')">Ville <span class="sort-icon" id="icon-ville">⇅</span></th>
+              <th class="sortable" onclick="sortBy('prix')">Prix <span class="sort-icon" id="icon-prix">⇅</span></th>
               <th>Services</th>
             </tr>
           </thead>
@@ -101,6 +105,10 @@ let selectedLng = null;
 let map = null;
 let markers = [];
 let debounceTimer = null;
+let currentData = [];       // stations annotées (stable, jamais retrier par BQ)
+let currentFuel = '';
+let sortCol = 'distance_km';
+let sortAsc = true;
 
 const addrInput = document.getElementById('addrInput');
 const suggestions = document.getElementById('suggestions');
@@ -180,6 +188,8 @@ async function search() {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('Erreur serveur');
     const stations = await resp.json();
+    sortCol = 'distance_km';
+    sortAsc = true;
     renderResults(stations, fuel);
   } catch (e) {
     setStatus('Erreur lors de la recherche. Veuillez réessayer.');
@@ -188,50 +198,88 @@ async function search() {
   }
 }
 
+function sortBy(col) {
+  if (sortCol === col) {
+    sortAsc = !sortAsc;
+  } else {
+    sortCol = col;
+    sortAsc = true;
+  }
+  renderTable();
+  updateSortIcons();
+}
+
+function updateSortIcons() {
+  ['distance_km', 'adresse', 'ville', 'prix'].forEach(col => {
+    const icon = document.getElementById(`icon-${col}`);
+    if (!icon) return;
+    if (col === sortCol) {
+      icon.textContent = sortAsc ? '▲' : '▼';
+      icon.classList.add('active');
+    } else {
+      icon.textContent = '⇅';
+      icon.classList.remove('active');
+    }
+  });
+}
+
+function getSortedData() {
+  return [...currentData].sort((a, b) => {
+    let va = a[sortCol];
+    let vb = b[sortCol];
+    // valeurs nulles en dernier
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') {
+      va = va.toLowerCase();
+      vb = (vb || '').toLowerCase();
+      return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    }
+    return sortAsc ? va - vb : vb - va;
+  });
+}
+
+function renderTable() {
+  const tbody = document.getElementById('resultsBody');
+  const sorted = getSortedData();
+  tbody.innerHTML = sorted.map(s => {
+    const priceClass = s.isMax ? 'prix-cell cher' : 'prix-cell';
+    return `<tr class="result-row" style="cursor:pointer" onclick="focusMarker(${s._mapIdx})">
+      <td><span class="dist-badge">${s.distance_km} km</span></td>
+      <td>${s.adresse}</td>
+      <td>${s.ville}<br><small style="color:#888">${s.code_postal}</small></td>
+      <td><span class="${priceClass}">${s.prix != null ? s.prix + ' €' : '—'}</span></td>
+      <td><small>${s.services}</small></td>
+    </tr>`;
+  }).join('');
+}
+
 function renderResults(stations, fuel) {
   const section = document.getElementById('resultsSection');
-  const tbody = document.getElementById('resultsBody');
   const title = document.getElementById('resultsTitle');
   const mapDiv = document.getElementById('map');
 
+  currentFuel = fuel;
   const fuelLabel = document.getElementById('fuelSelect').options[document.getElementById('fuelSelect').selectedIndex].text;
   title.textContent = `${stations.length} station${stations.length > 1 ? 's' : ''} — ${fuelLabel}`;
 
   if (!stations.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="color:#666;padding:1rem">Aucune station trouvée dans ce rayon.</td></tr>';
+    currentData = [];
+    document.getElementById('resultsBody').innerHTML =
+      '<tr><td colspan="5" style="color:#666;padding:1rem">Aucune station trouvée dans ce rayon.</td></tr>';
     section.style.display = 'block';
     setStatus('');
     return;
   }
 
-  const prices = stations.map(s => s.prix).filter(Boolean);
-  const minPrice = prices.reduce((a, b) => a < b ? a : b, Infinity);
-  const maxPrice = prices.reduce((a, b) => a > b ? a : b, -Infinity);
+  const prices = stations.map(s => s.prix).filter(p => p != null);
+  const minPrice = Math.min(...prices);
+  const maxPrice = Math.max(...prices);
 
-  const annotated = stations.map(s => ({
-    ...s,
-    isMin: s.prix === minPrice,
-    isMax: s.prix === maxPrice,
-    services: (s.services || '').split('|').filter(Boolean).slice(0, 3).join(', ') || '—',
-  }));
-
-  tbody.innerHTML = annotated.map((s, i) => {
-    const priceClass = s.isMax ? 'prix-cell cher' : 'prix-cell';
-    return `<tr class="result-row" data-idx="${i}" style="cursor:pointer" onclick="focusMarker(${i})">
-      <td><span class="dist-badge">${s.distance_km} km</span></td>
-      <td>${s.adresse}</td>
-      <td>${s.ville}<br><small style="color:#888">${s.code_postal}</small></td>
-      <td><span class="${priceClass}">${s.prix} €</span></td>
-      <td><small>${s.services}</small></td>
-    </tr>`;
-  }).join('');
-
-  section.style.display = 'block';
-  setStatus('');
-
+  // Initialisation carte avant d'affecter les markers
   mapDiv.style.display = 'block';
   initOrResetMap();
-
   markers = [];
   const bounds = [];
 
@@ -240,27 +288,43 @@ function renderResults(stations, fuel) {
   }).bindPopup('<strong>Votre position</strong>').addTo(map);
   bounds.push([selectedLat, selectedLng]);
 
-  annotated.forEach((s, i) => {
-    if (!s.latitude || !s.longitude) return;
-    const color = s.isMin ? '#16a34a' : s.isMax ? '#dc2626' : '#2563eb';
-    const m = L.circleMarker([s.latitude, s.longitude], {
-      radius: 7, color, fillColor: color, fillOpacity: 0.85, weight: 1.5,
-    });
-    m.bindPopup(`
-      <strong>${s.adresse}</strong><br>
-      ${s.ville} ${s.code_postal}<br>
-      <strong style="color:${color}">${fuel.toUpperCase()} : ${s.prix} €/L</strong>
-      <br><small>${s.distance_km} km — ${s.services}</small>
-    `);
-    m.addTo(map);
-    markers.push(m);
-    bounds.push([s.latitude, s.longitude]);
+  currentData = stations.map((s, i) => {
+    const isMin = s.prix === minPrice;
+    const isMax = s.prix === maxPrice;
+    const servicesText = (s.services || '').split('|').filter(Boolean).slice(0, 3).join(', ') || '—';
+
+    // Ajout marker carte
+    let mapIdx = null;
+    if (s.latitude && s.longitude) {
+      const color = isMin ? '#16a34a' : isMax ? '#dc2626' : '#2563eb';
+      const m = L.circleMarker([s.latitude, s.longitude], {
+        radius: 7, color, fillColor: color, fillOpacity: 0.85, weight: 1.5,
+      });
+      m.bindPopup(`
+        <strong>${s.adresse}</strong><br>
+        ${s.ville} ${s.code_postal}<br>
+        <strong style="color:${color}">${fuel.toUpperCase()} : ${s.prix} €/L</strong>
+        <br><small>${s.distance_km} km — ${servicesText}</small>
+      `);
+      m.addTo(map);
+      mapIdx = markers.length;
+      markers.push(m);
+      bounds.push([s.latitude, s.longitude]);
+    }
+
+    return { ...s, isMin, isMax, services: servicesText, _mapIdx: mapIdx };
   });
 
   if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30] });
+
+  section.style.display = 'block';
+  setStatus('');
+  renderTable();
+  updateSortIcons();
 }
 
 function focusMarker(idx) {
+  if (idx == null) return;
   const m = markers[idx];
   if (!m) return;
   map.setView(m.getLatLng(), 14);
