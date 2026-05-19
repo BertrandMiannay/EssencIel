@@ -56,6 +56,26 @@ def trouver(request):
     })
 
 
+def evolution(request):
+    zone_type = request.GET.get("zone_type", "france")
+    zone_value = request.GET.get("zone_value", "").strip()
+    periode = request.GET.get("periode", "7j")
+
+    valid_zones = ("france", "region", "departement", "ville")
+    valid_periodes = ("24h", "7j", "30j")
+    if zone_type not in valid_zones:
+        zone_type = "france"
+    if periode not in valid_periodes:
+        periode = "7j"
+
+    return render(request, "carburants/evolution.html", {
+        "fuels": FUEL_LABELS,
+        "zone_type": zone_type,
+        "zone_value": zone_value,
+        "periode": periode,
+    })
+
+
 def recherche(request):
     service = request.GET.get("service", "").strip()
     code_postal = request.GET.get("code_postal", "").strip()

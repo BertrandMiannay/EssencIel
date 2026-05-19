@@ -1,0 +1,132 @@
+{% extends "carburants/base.html" %}
+{% block title %}Évolution — EssencIel{% endblock %}
+{% block nav_evolution %}active{% endblock %}
+
+{% block extra_head %}
+<style>
+  .filter-bar { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; }
+  .filter-group { display: flex; flex-direction: column; gap: 0.3rem; }
+  .filter-group label { font-size: 0.78rem; color: #666; font-weight: 500; }
+  .periode-tabs { display: flex; gap: 0.4rem; }
+  .periode-tab { padding: 0.35rem 0.9rem; border-radius: 20px; border: 1px solid #ddd;
+                 background: white; color: #555; font-size: 0.85rem; cursor: pointer;
+                 text-decoration: none; }
+  .periode-tab.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+  .empty-state { text-align: center; padding: 3rem 1rem; color: #999; }
+  .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+  .trend-up { color: #dc3545; }
+  .trend-down { color: #28a745; }
+  .trend-flat { color: #999; }
+  #zone-value-wrapper { display: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1>Évolution des prix et pénuries</h1>
+
+<div class="card" style="margin-bottom: 1.5rem">
+  <form method="get" class="filter-bar" id="evolution-form">
+
+    <div class="filter-group">
+      <label for="zone_type">Zone géographique</label>
+      <select name="zone_type" id="zone_type" onchange="toggleZoneValue()">
+        <option value="france"      {% if zone_type == "france" %}selected{% endif %}>France entière</option>
+        <option value="region"      {% if zone_type == "region" %}selected{% endif %}>Région</option>
+        <option value="departement" {% if zone_type == "departement" %}selected{% endif %}>Département</option>
+        <option value="ville"       {% if zone_type == "ville" %}selected{% endif %}>Ville</option>
+      </select>
+    </div>
+
+    <div class="filter-group" id="zone-value-wrapper">
+      <label for="zone_value" id="zone-value-label">Valeur</label>
+      <input type="text" name="zone_value" id="zone_value"
+             value="{{ zone_value }}" placeholder="Ex : Île-de-France" style="min-width: 220px">
+    </div>
+
+    <div class="filter-group">
+      <label>Période</label>
+      <div class="periode-tabs">
+        <a href="?zone_type={{ zone_type }}&zone_value={{ zone_value }}&periode=24h"
+           class="periode-tab {% if periode == '24h' %}active{% endif %}">24 h</a>
+        <a href="?zone_type={{ zone_type }}&zone_value={{ zone_value }}&periode=7j"
+           class="periode-tab {% if periode == '7j' %}active{% endif %}">7 jours</a>
+        <a href="?zone_type={{ zone_type }}&zone_value={{ zone_value }}&periode=30j"
+           class="periode-tab {% if periode == '30j' %}active{% endif %}">30 jours</a>
+      </div>
+    </div>
+
+    <div class="filter-group" style="justify-content: flex-end">
+      <button type="submit">Appliquer</button>
+    </div>
+
+  </form>
+</div>
+
+<div class="card">
+  <h2>
+    Prix moyens —
+    {% if zone_type == "france" %}France entière
+    {% elif zone_type == "region" %}Région {% if zone_value %}: {{ zone_value }}{% endif %}
+    {% elif zone_type == "departement" %}Département {% if zone_value %}: {{ zone_value }}{% endif %}
+    {% else %}Ville {% if zone_value %}: {{ zone_value }}{% endif %}
+    {% endif %}
+    &mdash;
+    {% if periode == "24h" %}24 dernières heures
+    {% elif periode == "7j" %}7 derniers jours
+    {% else %}30 derniers jours
+    {% endif %}
+  </h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        {% for fuel, label in fuels.items %}
+        <th>{{ label }}</th>
+        <th style="color:#999; font-weight:400; font-size:0.8rem">Var.</th>
+        {% endfor %}
+        <th>Taux de pénurie</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td colspan="{{ fuels|length|add:fuels|length|add:2 }}" style="padding: 0">
+          <div class="empty-state">
+            <div class="icon">📊</div>
+            <p>Les données d'évolution seront disponibles prochainement.</p>
+          </div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  const LABELS = {
+    region: "Région (ex : Île-de-France)",
+    departement: "Département (ex : Gironde ou 33)",
+    ville: "Ville (ex : Bordeaux)",
+  };
+
+  function toggleZoneValue() {
+    const type = document.getElementById("zone_type").value;
+    const wrapper = document.getElementById("zone-value-wrapper");
+    const label = document.getElementById("zone-value-label");
+    const input = document.getElementById("zone_value");
+
+    if (type === "france") {
+      wrapper.style.display = "none";
+      input.value = "";
+    } else {
+      wrapper.style.display = "flex";
+      label.textContent = LABELS[type] || "Valeur";
+      input.placeholder = LABELS[type] || "";
+    }
+  }
+
+  // Initialise au chargement
+  toggleZoneValue();
+</script>
+{% endblock %}

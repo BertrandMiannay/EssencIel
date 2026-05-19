@@ -6,4 +6,5 @@ urlpatterns = [
     path("trouver/", views_front.trouver, name="trouver"),
     path("carte/", views_front.carte, name="carte"),
     path("recherche/", views_front.recherche, name="recherche"),
+    path("evolution/", views_front.evolution, name="evolution"),
 ]
