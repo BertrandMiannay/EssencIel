@@ -28,11 +28,10 @@ SOURCE_URL = (
 GCP_PROJECT = os.environ["GCP_PROJECT"]
 GCS_BUCKET = os.environ.get("GCS_BUCKET")
 BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
-BQ_TABLE = os.environ.get("BQ_TABLE", "snapshots")
-BQ_LOG_TABLE = f"{GCP_PROJECT}.{BQ_DATASET}.ingestion_log"
-BQ_SILVER = f"{GCP_PROJECT}.{BQ_DATASET}.stations_latest"
-BQ_GOLD_ZONE = f"{GCP_PROJECT}.{BQ_DATASET}.prix_moyens_zone"
-BQ_GOLD_SYNTHESE = f"{GCP_PROJECT}.{BQ_DATASET}.nationale_synthese"
+BQ_TABLE = "raw_snapshots"
+BQ_LOG_TABLE = f"{GCP_PROJECT}.{BQ_DATASET}.raw_ingestion_log"
+BQ_SILVER = f"{GCP_PROJECT}.{BQ_DATASET}.silver_stations_latest"
+BQ_GOLD_ZONE = f"{GCP_PROJECT}.{BQ_DATASET}.gold_prix_moyens_zone"
 BQ_GOLD_TOP = f"{GCP_PROJECT}.{BQ_DATASET}.gold_top_stations"
 
 # (bq_prefix, csv_prix_label, csv_rupture_label)
@@ -173,21 +172,6 @@ def _gold_top_schema() -> list[bigquery.SchemaField]:
     ]
 
 
-def _gold_synthese_schema() -> list[bigquery.SchemaField]:
-    fields = [
-        bigquery.SchemaField("ingested_at",       "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("nb_stations_total", "INT64",     mode="NULLABLE"),
-    ]
-    for bq_prefix, *_ in FUEL_MAP:
-        fields += [
-            bigquery.SchemaField(f"{bq_prefix}_prix_moyen",   "FLOAT64", mode="NULLABLE"),
-            bigquery.SchemaField(f"{bq_prefix}_prix_min",     "FLOAT64", mode="NULLABLE"),
-            bigquery.SchemaField(f"{bq_prefix}_prix_max",     "FLOAT64", mode="NULLABLE"),
-            bigquery.SchemaField(f"{bq_prefix}_taux_rupture", "FLOAT64", mode="NULLABLE"),
-            bigquery.SchemaField(f"{bq_prefix}_nb_stations",  "INT64",   mode="NULLABLE"),
-        ]
-    return fields
-
 
 def _ensure_table(
     client: bigquery.Client,
@@ -216,12 +200,11 @@ def ensure_infrastructure(client: bigquery.Client) -> None:
 
     _ensure_table(client, BQ_TABLE, _bq_schema(),
                   partition_field="ingested_at", cluster=["region", "code_postal"])
-    _ensure_table(client, "ingestion_log", _log_schema())
-    _ensure_table(client, "stations_latest", _bq_schema(),
+    _ensure_table(client, "raw_ingestion_log", _log_schema())
+    _ensure_table(client, "silver_stations_latest", _bq_schema(),
                   cluster=["region", "code_postal"])
-    _ensure_table(client, "prix_moyens_zone", _gold_zone_schema(),
+    _ensure_table(client, "gold_prix_moyens_zone", _gold_zone_schema(),
                   cluster=["zone_type", "zone_value"])
-    _ensure_table(client, "nationale_synthese", _gold_synthese_schema())
     _ensure_table(client, "gold_top_stations", _gold_top_schema(),
                   cluster=["zone_type", "zone_value", "fuel"])
 
@@ -324,15 +307,6 @@ def _fuel_zone_agg(fuel: str) -> str:
     )
 
 
-def _fuel_synthese_agg(fuel: str) -> str:
-    return (
-        f"ROUND(AVG(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_moyen"
-        f", ROUND(MIN(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_min"
-        f", ROUND(MAX(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_max"
-        f", ROUND(COUNTIF({fuel}_rupture IS TRUE) / COUNT(*), 4) AS {fuel}_taux_rupture"
-        f", COUNTIF({fuel}_prix IS NOT NULL) AS {fuel}_nb_stations"
-    )
-
 
 def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
     t0 = time.perf_counter()
@@ -368,24 +342,6 @@ def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
         query_parameters=[ts_param],
     )).result()
     logger.info("Gold prix_moyens_zone OK en %.1fs", time.perf_counter() - t0)
-
-    t1 = time.perf_counter()
-    fuel_synthese_cols = ", ".join(_fuel_synthese_agg(f) for f in fuels)
-
-    synthese_sql = f"""
-    SELECT
-      @ingested_at AS ingested_at,
-      COUNT(*) AS nb_stations_total,
-      {fuel_synthese_cols}
-    FROM `{BQ_SILVER}`
-    """
-
-    client.query(synthese_sql, job_config=bigquery.QueryJobConfig(
-        destination=BQ_GOLD_SYNTHESE,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        query_parameters=[ts_param],
-    )).result()
-    logger.info("Gold nationale_synthese OK en %.1fs", time.perf_counter() - t1)
 
     t2 = time.perf_counter()
     station_cols = "station_id, adresse, ville, code_postal, departement, region, latitude, longitude"

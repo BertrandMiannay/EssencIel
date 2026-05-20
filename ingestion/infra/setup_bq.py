@@ -18,7 +18,7 @@ API_DATASET_URL = (
 
 GCP_PROJECT = os.environ.get("GCP_PROJECT")
 BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
-BQ_TABLE = os.environ.get("BQ_TABLE", "snapshots")
+BQ_TABLE = "raw_snapshots"
 
 SCHEMA_PATH = Path(__file__).parent.parent / "bigquery" / "schema.json"
 

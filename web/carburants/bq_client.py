@@ -12,20 +12,16 @@ def _ref(table_name: str) -> str:
     return f"{settings.GCP_PROJECT}.{settings.BQ_DATASET}.{table_name}"
 
 
-def table_ref() -> str:
-    return _ref(settings.BQ_TABLE)
+def raw_table_ref() -> str:
+    return _ref("raw_snapshots")
 
 
 def silver_table_ref() -> str:
-    return _ref("stations_latest")
+    return _ref("silver_stations_latest")
 
 
 def gold_zone_table_ref() -> str:
-    return _ref("prix_moyens_zone")
-
-
-def gold_synthese_table_ref() -> str:
-    return _ref("nationale_synthese")
+    return _ref("gold_prix_moyens_zone")
 
 
 def gold_top_table_ref() -> str:

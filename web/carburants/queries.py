@@ -3,7 +3,7 @@ import logging
 import time
 
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter, enums
-from .bq_client import get_client, table_ref, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref, gold_top_table_ref
+from .bq_client import get_client, raw_table_ref, silver_table_ref, gold_zone_table_ref, gold_top_table_ref
 
 logger = logging.getLogger("carburants.bq")
 
@@ -140,7 +140,7 @@ def evolution_ruptures(zone_type: str, zone_value: str | None, periode: str) -> 
           f" AS {f}_taux_rupture"
           for f in FUELS
       )}
-    FROM `{table_ref()}`
+    FROM `{raw_table_ref()}`
     WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
       {zone_filter}
     GROUP BY ingested_at
@@ -166,7 +166,7 @@ def evolution_prix(zone_type: str, zone_value: str | None, periode: str) -> list
           f"ROUND(AVG(IF({f}_rupture IS FALSE, {f}_prix, NULL)), 3) AS {f}_prix_moyen"
           for f in FUELS
       )}
-    FROM `{table_ref()}`
+    FROM `{raw_table_ref()}`
     WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
       {zone_filter}
     GROUP BY ingested_at

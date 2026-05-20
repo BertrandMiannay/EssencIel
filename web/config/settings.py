@@ -44,7 +44,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # BigQuery
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
-BQ_TABLE = os.environ.get("BQ_TABLE", "snapshots")
 
 LOGGING = {
     "version": 1,
