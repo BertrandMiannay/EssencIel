@@ -1,0 +1,19 @@
+[Unit]
+Description=EssencIel — Django carburants
+After=network.target
+
+[Service]
+User=<your-user>
+Group=<your-user>
+WorkingDirectory=/home/<your-user>/EssencIel/web
+EnvironmentFile=/etc/essenciel/env
+ExecStart=/home/<your-user>/EssencIel/.venv/bin/gunicorn \
+    --workers 3 \
+    --bind unix:/run/essenciel/gunicorn.sock \
+    config.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+RuntimeDirectory=essenciel
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
