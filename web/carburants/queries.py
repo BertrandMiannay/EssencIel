@@ -3,7 +3,7 @@ import logging
 import time
 
 from google.cloud.bigquery import QueryJobConfig, ScalarQueryParameter, enums
-from .bq_client import get_client, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref, gold_top_table_ref
+from .bq_client import get_client, table_ref, silver_table_ref, gold_zone_table_ref, gold_synthese_table_ref, gold_top_table_ref
 
 logger = logging.getLogger("carburants.bq")
 
@@ -121,6 +121,35 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
     ]
 
     return _run_query(sql, params, "stations_proches")
+
+
+_PERIODE_DAYS = {"24h": 2, "7j": 7, "30j": 30}
+
+
+def evolution_prix(zone_type: str, zone_value: str | None, periode: str) -> list[dict]:
+    """Prix moyen journalier par carburant sur une période glissante, depuis snapshots."""
+    nb_jours = _PERIODE_DAYS.get(periode, 7)
+    zone_filter = _ZONE_FILTER.get(zone_type, "")
+
+    sql = f"""
+    SELECT
+      DATE(ingested_at) AS date,
+      {", ".join(
+          f"ROUND(AVG(IF({f}_rupture IS FALSE, {f}_prix, NULL)), 3) AS {f}_prix_moyen"
+          for f in FUELS
+      )}
+    FROM `{table_ref()}`
+    WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
+      {zone_filter}
+    GROUP BY date
+    ORDER BY date
+    """
+
+    params = [_int_param("nb_jours", nb_jours)]
+    if zone_value:
+        params.append(_str_param("zone_value", zone_value))
+
+    return _run_query(sql, params, "evolution_prix")
 
 
 # --- helpers ---

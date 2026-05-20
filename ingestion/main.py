@@ -11,6 +11,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery, storage
 
 load_dotenv()
@@ -229,6 +230,14 @@ def _md5(content: bytes) -> str:
     return hashlib.md5(content).hexdigest()
 
 
+def _log_table_exists(client: bigquery.Client) -> bool:
+    try:
+        client.get_table(BQ_LOG_TABLE)
+        return True
+    except NotFound:
+        return False
+
+
 def _already_ingested(client: bigquery.Client, file_md5: str) -> bool:
     rows = list(client.query(
         f"SELECT 1 FROM `{BQ_LOG_TABLE}` WHERE file_md5 = @md5 LIMIT 1",
@@ -435,11 +444,12 @@ def ingest(request=None):
     logger.info("MD5 : %s", file_md5)
 
     client = bigquery.Client(project=GCP_PROJECT)
-    ensure_infrastructure(client)
 
-    if _already_ingested(client, file_md5):
+    if _log_table_exists(client) and _already_ingested(client, file_md5):
         logger.info("Déjà ingéré (MD5 %s) — skip", file_md5)
         return {"status": "skipped", "md5": file_md5}, 200
+
+    ensure_infrastructure(client)
 
     gcs_uri = None
     if GCS_BUCKET:

@@ -1,3 +1,4 @@
+import json
 from django.shortcuts import render
 from django.core.cache import cache
 from . import queries
@@ -112,16 +113,34 @@ def evolution(request):
     zone_value = request.GET.get("zone_value", "").strip()
     periode = request.GET.get("periode", "7j")
 
-    valid_zones = ("france", "region", "departement", "code_postal")
+    valid_zones = ("france", "region", "departement")
     valid_periodes = ("24h", "7j", "30j")
     if zone_type not in valid_zones:
         zone_type = "france"
     if periode not in valid_periodes:
         periode = "7j"
 
+    rows = cache.get_or_set(
+        f"evolution:{zone_type}:{zone_value}:{periode}",
+        lambda: queries.evolution_prix(zone_type, zone_value or None, periode),
+        _CACHE_TTL,
+    )
+
+    labels = []
+    fuel_series: dict[str, list] = {f: [] for f in FUELS}
+    for r in rows:
+        labels.append(r["date"].isoformat())
+        for f in FUELS:
+            fuel_series[f].append(r.get(f"{f}_prix_moyen"))
+    chart_data = {"labels": labels, "fuels": fuel_series}
+
     return render(request, "carburants/evolution.html", {
         "fuels": FUEL_LABELS,
         "zone_type": zone_type,
         "zone_value": zone_value,
         "periode": periode,
+        "chart_data_json": json.dumps(chart_data),
+        "has_data": bool(rows),
+        "regions": REGIONS,
+        "departements": DEPARTEMENTS,
     })
