@@ -1,7 +1,17 @@
 import json
+from zoneinfo import ZoneInfo
 from django.shortcuts import render
 from django.core.cache import cache
 from . import queries
+
+_PARIS_TZ = ZoneInfo("Europe/Paris")
+_MONTHS_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin",
+               "juil.", "août", "sept.", "oct.", "nov.", "déc."]
+
+def _fmt_dt(dt):
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(_PARIS_TZ)
+    return f"{dt.day} {_MONTHS_FR[dt.month - 1]} {dt.hour:02d}h{dt.minute:02d}"
 
 _CACHE_TTL = 3600  # données ingérées quotidiennement
 
@@ -134,14 +144,14 @@ def evolution(request):
     labels = []
     fuel_series: dict[str, list] = {f: [] for f in FUELS}
     for r in rows:
-        labels.append(r["date"].isoformat())
+        labels.append(_fmt_dt(r["date"]))
         for f in FUELS:
             fuel_series[f].append(r.get(f"{f}_prix_moyen"))
     chart_data = {"labels": labels, "fuels": fuel_series}
 
     rupture_table = [
         {
-            "date": r["date"],
+            "date": _fmt_dt(r["date"]),
             "fuels": [
                 {"key": f, "label": FUEL_LABELS[f], "value": r.get(f"{f}_taux_rupture")}
                 for f in FUELS

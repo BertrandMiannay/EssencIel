@@ -133,7 +133,7 @@ def evolution_ruptures(zone_type: str, zone_value: str | None, periode: str) -> 
 
     sql = f"""
     SELECT
-      DATE(ingested_at) AS date,
+      ingested_at AS date,
       {", ".join(
           f"ROUND(100 * COUNTIF({f}_rupture IS TRUE)"
           f" / NULLIF(COUNTIF({f}_prix IS NOT NULL OR {f}_rupture IS TRUE), 0), 1)"
@@ -143,8 +143,8 @@ def evolution_ruptures(zone_type: str, zone_value: str | None, periode: str) -> 
     FROM `{table_ref()}`
     WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
       {zone_filter}
-    GROUP BY date
-    ORDER BY date
+    GROUP BY ingested_at
+    ORDER BY ingested_at
     """
 
     params = [_int_param("nb_jours", nb_jours)]
@@ -161,7 +161,7 @@ def evolution_prix(zone_type: str, zone_value: str | None, periode: str) -> list
 
     sql = f"""
     SELECT
-      DATE(ingested_at) AS date,
+      ingested_at AS date,
       {", ".join(
           f"ROUND(AVG(IF({f}_rupture IS FALSE, {f}_prix, NULL)), 3) AS {f}_prix_moyen"
           for f in FUELS
@@ -169,8 +169,8 @@ def evolution_prix(zone_type: str, zone_value: str | None, periode: str) -> list
     FROM `{table_ref()}`
     WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
       {zone_filter}
-    GROUP BY date
-    ORDER BY date
+    GROUP BY ingested_at
+    ORDER BY ingested_at
     """
 
     params = [_int_param("nb_jours", nb_jours)]
