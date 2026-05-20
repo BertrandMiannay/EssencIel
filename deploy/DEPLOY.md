@@ -22,19 +22,31 @@ python3 -m venv .venv
 sudo mkdir /etc/essenciel
 sudo cp deploy/env.example /etc/essenciel/env
 sudo nano /etc/essenciel/env  # remplir SECRET_KEY, ALLOWED_HOSTS, GCP_PROJECT, GCS_BUCKET
-sudo chmod 600 /etc/essenciel/env
+sudo chmod 666 /etc/essenciel/env
 ```
 
 ## 3. Credentials GCP
 
-Télécharger la clé JSON du compte de service depuis la console GCP, puis :
+Installer le SDK Google Cloud puis générer les credentials Application Default :
 
 ```bash
-sudo cp gcp-sa.json /etc/essenciel/gcp-sa.json
-sudo chmod 600 /etc/essenciel/gcp-sa.json
+sudo apt install apt-transport-https ca-certificates gnupg -y
+echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+  | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+  | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
+sudo apt update && sudo apt install google-cloud-cli -y
 ```
 
-Le chemin doit correspondre à `GOOGLE_APPLICATION_CREDENTIALS` dans `/etc/essenciel/env`.
+Se connecter et générer le profil ADC sous l'utilisateur qui exécutera le service :
+
+```bash
+gcloud auth login
+gcloud config set project <GCP_PROJECT>
+gcloud auth application-default login
+```
+
+Les credentials sont écrits dans `~/.config/gcloud/application_default_credentials.json` et utilisés automatiquement par les SDK Google Cloud (BigQuery, Storage).
 
 ## 4. Préparer l'app
 
@@ -57,24 +69,19 @@ sudo systemctl enable --now essenciel
 sudo systemctl status essenciel
 ```
 
-## 6. Nginx + HTTPS (Let's Encrypt)
+## 6. Nginx (HTTP, accès par IP)
 
-Remplacer `<domaine>` et `<your-user>` dans `deploy/nginx.conf`, puis :
+Remplacer `<your-user>` dans `deploy/nginx.conf`, puis :
 
 ```bash
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/essenciel
 sudo ln -s /etc/nginx/sites-available/essenciel /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default  # désactiver le vhost par défaut
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### Activer HTTPS avec Certbot
-
-```bash
-sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d <domaine>
-sudo systemctl restart essenciel
-```
+L'app est ensuite accessible directement sur `http://<IP-du-serveur>`.
 
 ## 7. Ingestion quotidienne (cron systemd)
 
