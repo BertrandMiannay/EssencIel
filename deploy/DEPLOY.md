@@ -69,19 +69,27 @@ sudo systemctl enable --now essenciel
 sudo systemctl status essenciel
 ```
 
-## 6. Nginx (HTTP, accès par IP)
+## 6. Nginx + HTTPS (Let's Encrypt)
 
-Remplacer `<your-user>` dans `deploy/nginx.conf`, puis :
+Remplacer `<domaine>` et `<your-user>` dans `deploy/nginx.conf`, puis :
 
 ```bash
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/essenciel
 sudo ln -s /etc/nginx/sites-available/essenciel /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default  # désactiver le vhost par défaut
+sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-L'app est ensuite accessible directement sur `http://<IP-du-serveur>`.
+### Activer HTTPS avec Certbot
+
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d <domaine>
+sudo systemctl restart essenciel
+```
+
+L'app est ensuite accessible sur `https://<domaine>`.
 
 ## 7. Ingestion quotidienne (cron systemd)
 
@@ -95,7 +103,6 @@ sudo systemctl enable --now essenciel-ingestion.timer
 sudo systemctl list-timers essenciel-ingestion.timer  # vérifier la prochaine exécution
 ```
 
-Le timer déclenche l'ingestion chaque jour à 8h00 (±5 min aléatoires).
 
 ### Lancer l'ingestion manuellement
 
