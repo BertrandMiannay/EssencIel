@@ -122,8 +122,20 @@ addrInput.addEventListener('input', () => {
   debounceTimer = setTimeout(() => fetchSuggestions(q), 280);
 });
 
-addrInput.addEventListener('blur', () => {
-  setTimeout(() => { suggestions.style.display = 'none'; }, 150);
+// Ferme les suggestions si on clique ailleurs dans la page
+document.addEventListener('click', (e) => {
+  if (!addrInput.contains(e.target) && !suggestions.contains(e.target)) {
+    suggestions.style.display = 'none';
+  }
+});
+
+// Listener unique par délégation — évite les problèmes de re-attachment
+suggestions.addEventListener('mousedown', (e) => {
+  e.preventDefault(); // empêche le blur sur l'input
+  const el = e.target.closest('.suggestion');
+  if (!el) return;
+  setLocation(parseFloat(el.dataset.lat), parseFloat(el.dataset.lng), el.dataset.label);
+  suggestions.style.display = 'none';
 });
 
 async function fetchSuggestions(q) {
@@ -143,12 +155,6 @@ function renderSuggestions(features) {
       ${f.properties.label}
     </div>`;
   }).join('');
-  suggestions.querySelectorAll('.suggestion').forEach(el => {
-    el.addEventListener('click', () => {
-      setLocation(parseFloat(el.dataset.lat), parseFloat(el.dataset.lng), el.dataset.label);
-      suggestions.style.display = 'none';
-    });
-  });
   suggestions.style.display = 'block';
 }
 
