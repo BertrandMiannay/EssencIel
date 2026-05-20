@@ -125,6 +125,11 @@ def evolution(request):
         lambda: queries.evolution_prix(zone_type, zone_value or None, periode),
         _CACHE_TTL,
     )
+    rupture_rows = cache.get_or_set(
+        f"evolution:ruptures:{zone_type}:{zone_value}:{periode}",
+        lambda: queries.evolution_ruptures(zone_type, zone_value or None, periode),
+        _CACHE_TTL,
+    )
 
     labels = []
     fuel_series: dict[str, list] = {f: [] for f in FUELS}
@@ -134,6 +139,17 @@ def evolution(request):
             fuel_series[f].append(r.get(f"{f}_prix_moyen"))
     chart_data = {"labels": labels, "fuels": fuel_series}
 
+    rupture_table = [
+        {
+            "date": r["date"],
+            "fuels": [
+                {"key": f, "label": FUEL_LABELS[f], "value": r.get(f"{f}_taux_rupture")}
+                for f in FUELS
+            ],
+        }
+        for r in rupture_rows
+    ]
+
     return render(request, "carburants/evolution.html", {
         "fuels": FUEL_LABELS,
         "zone_type": zone_type,
@@ -141,6 +157,7 @@ def evolution(request):
         "periode": periode,
         "chart_data_json": json.dumps(chart_data),
         "has_data": bool(rows),
+        "rupture_table": rupture_table,
         "regions": REGIONS,
         "departements": DEPARTEMENTS,
     })

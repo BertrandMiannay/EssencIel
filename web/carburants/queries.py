@@ -126,6 +126,34 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
 _PERIODE_DAYS = {"24h": 2, "7j": 7, "30j": 30}
 
 
+def evolution_ruptures(zone_type: str, zone_value: str | None, periode: str) -> list[dict]:
+    """Taux de rupture journalier (%) par carburant sur une période glissante."""
+    nb_jours = _PERIODE_DAYS.get(periode, 7)
+    zone_filter = _ZONE_FILTER.get(zone_type, "")
+
+    sql = f"""
+    SELECT
+      DATE(ingested_at) AS date,
+      {", ".join(
+          f"ROUND(100 * COUNTIF({f}_rupture IS TRUE)"
+          f" / NULLIF(COUNTIF({f}_prix IS NOT NULL OR {f}_rupture IS TRUE), 0), 1)"
+          f" AS {f}_taux_rupture"
+          for f in FUELS
+      )}
+    FROM `{table_ref()}`
+    WHERE ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL @nb_jours DAY)
+      {zone_filter}
+    GROUP BY date
+    ORDER BY date
+    """
+
+    params = [_int_param("nb_jours", nb_jours)]
+    if zone_value:
+        params.append(_str_param("zone_value", zone_value))
+
+    return _run_query(sql, params, "evolution_ruptures")
+
+
 def evolution_prix(zone_type: str, zone_value: str | None, periode: str) -> list[dict]:
     """Prix moyen journalier par carburant sur une période glissante, depuis snapshots."""
     nb_jours = _PERIODE_DAYS.get(periode, 7)

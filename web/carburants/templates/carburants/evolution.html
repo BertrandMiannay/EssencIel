@@ -13,6 +13,17 @@
   .empty-state { text-align: center; padding: 3rem 1rem; color: #999; }
   .empty-state .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
   .chart-wrap { position: relative; height: 340px; }
+  .rupture-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 0.5rem; }
+  .rupture-table th { background: #f3f4f6; text-align: center; padding: 0.4rem 0.6rem;
+                      font-weight: 600; border-bottom: 2px solid #e5e7eb; }
+  .rupture-table th:first-child { text-align: left; }
+  .rupture-table td { text-align: center; padding: 0.35rem 0.6rem; border-bottom: 1px solid #f0f0f0; }
+  .rupture-table td:first-child { text-align: left; color: #555; }
+  .rupture-table tr:last-child td { border-bottom: none; }
+  .rp-low  { color: #16A34A; }
+  .rp-mid  { color: #CA8A04; }
+  .rp-high { color: #DC2626; font-weight: 600; }
+  .rp-none { color: #bbb; }
 </style>
 {% endblock %}
 
@@ -76,6 +87,42 @@
     </div>
   {% endif %}
 </div>
+
+{% if rupture_table %}
+<div class="card" style="margin-top:1.25rem">
+  <h2>Taux de ruptures par carburant</h2>
+  <div style="overflow-x:auto">
+    <table class="rupture-table">
+      <thead>
+        <tr>
+          <th>Date</th>
+          {% for fuel in rupture_table.0.fuels %}<th>{{ fuel.label }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rupture_table %}
+        <tr>
+          <td>{{ r.date }}</td>
+          {% for fuel in r.fuels %}
+          <td>
+            {% if fuel.value == None %}
+              <span class="rp-none">—</span>
+            {% elif fuel.value < 5 %}
+              <span class="rp-low">{{ fuel.value }} %</span>
+            {% elif fuel.value < 15 %}
+              <span class="rp-mid">{{ fuel.value }} %</span>
+            {% else %}
+              <span class="rp-high">{{ fuel.value }} %</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
