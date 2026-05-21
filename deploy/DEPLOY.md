@@ -71,17 +71,19 @@ sudo systemctl status essenciel
 
 ## 6. Nginx + HTTPS (Let's Encrypt)
 
-Remplacer `<domaine>` et `<your-user>` dans `deploy/nginx.conf`, puis :
+Remplacer `<domaine>` et `<your-user>` dans `deploy/nginx.conf`, puis déployer la config HTTP d'abord :
 
 ```bash
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/essenciel
-sudo ln -s /etc/nginx/sites-available/essenciel /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/essenciel /etc/nginx/sites-enabled/essenciel
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
 ### Activer HTTPS avec Certbot
+
+Certbot génère les certificats **et** met à jour la config nginx automatiquement (redirection 80→443 incluse) :
 
 ```bash
 sudo apt install certbot python3-certbot-nginx -y

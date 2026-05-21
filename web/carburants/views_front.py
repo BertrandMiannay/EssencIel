@@ -13,7 +13,7 @@ def _fmt_dt(dt):
         dt = dt.astimezone(_PARIS_TZ)
     return f"{dt.day} {_MONTHS_FR[dt.month - 1]} {dt.hour:02d}h{dt.minute:02d}"
 
-_CACHE_TTL = 3600  # données ingérées quotidiennement
+_CACHE_TTL = 6 * 3600  # données ingérées quotidiennement
 
 FUELS = queries.FUELS
 VALID_ZONE_TYPES = ("france", "region", "departement")
