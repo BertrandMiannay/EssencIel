@@ -283,7 +283,9 @@ function renderResults(stations, fuel) {
   const minPrice = Math.min(...prices);
   const maxPrice = Math.max(...prices);
 
-  // Initialisation carte avant d'affecter les markers
+  // Afficher la section et le div avant d'initialiser la carte
+  // pour que Leaflet puisse calculer les dimensions réelles du conteneur
+  section.style.display = 'block';
   mapDiv.style.display = 'block';
   initOrResetMap();
   markers = [];
@@ -322,8 +324,7 @@ function renderResults(stations, fuel) {
   });
 
   if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30] });
-
-  section.style.display = 'block';
+  map.invalidateSize();
   setStatus('');
   renderTable();
   updateSortIcons();
