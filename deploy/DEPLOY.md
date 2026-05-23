@@ -93,7 +93,7 @@ sudo systemctl restart essenciel
 
 L'app est ensuite accessible sur `https://<domaine>`.
 
-## 7. Ingestion quotidienne (cron systemd)
+## 7. Ingestion biquotidienne (cron systemd)
 
 Remplacer `<your-user>` dans `deploy/essenciel-ingestion.service`, puis :
 
@@ -105,6 +105,42 @@ sudo systemctl enable --now essenciel-ingestion.timer
 sudo systemctl list-timers essenciel-ingestion.timer  # vérifier la prochaine exécution
 ```
 
+
+### Modifier la fréquence de refresh
+
+La fréquence est définie à deux endroits selon le mode de déploiement :
+
+**VPS — systemd timer** (`deploy/essenciel-ingestion.timer`) :
+
+```ini
+[Timer]
+OnCalendar=*-*-* 00,12:00:00  # minuit et midi
+```
+
+Modifier la valeur `OnCalendar`, copier le fichier et recharger :
+
+```bash
+sudo cp deploy/essenciel-ingestion.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart essenciel-ingestion.timer
+sudo systemctl list-timers essenciel-ingestion.timer  # vérifier la prochaine exécution
+```
+
+**GCP — Cloud Scheduler** (`ingestion/infra/scheduler.yaml`) :
+
+```yaml
+schedule: "0 0,12 * * *"   # minuit et midi (Europe/Paris)
+timeZone: "Europe/Paris"
+```
+
+Mettre à jour le job via gcloud :
+
+```bash
+gcloud scheduler jobs update http carburants-ingestion-twice-daily \
+  --schedule="0 0,12 * * *" \
+  --time-zone="Europe/Paris" \
+  --location=<REGION>
+```
 
 ### Lancer l'ingestion manuellement
 

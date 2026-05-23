@@ -1,6 +1,6 @@
-name: carburants-ingestion-daily
-description: "Déclenche la Cloud Function d'ingestion des prix carburants chaque jour à 6h"
-schedule: "0 6 * * *"
+name: carburants-ingestion-twice-daily
+description: "Déclenche la Cloud Function d'ingestion des prix carburants deux fois par jour (minuit et midi)"
+schedule: "0 0,12 * * *"
 timeZone: "Europe/Paris"
 httpTarget:
   uri: ${CLOUD_FUNCTION_URL}
