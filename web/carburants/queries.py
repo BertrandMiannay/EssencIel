@@ -123,7 +123,7 @@ def stations_proches(lat: float, lng: float, fuel: str, rayon_km: float = 20, li
     return _run_query(sql, params, "stations_proches")
 
 
-_PERIODE_DAYS = {"24h": 2, "7j": 7, "30j": 30}
+_PERIODE_DAYS = {"24h": 1, "7j": 7, "30j": 30}
 
 
 def evolution_ruptures(zone_type: str, zone_value: str | None, periode: str) -> list[dict]:
