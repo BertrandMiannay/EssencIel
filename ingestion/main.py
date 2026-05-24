@@ -248,6 +248,9 @@ def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) 
     rows = [_transform_row(row, ingested_at) for row in reader]
     logger.info("Transformation : %d lignes en %.1fs", len(rows), time.perf_counter() - t0)
 
+    if not rows:
+        raise ValueError("CSV vide — 0 lignes après transformation (réponse API suspecte)")
+
     price_counts = {bq_prefix: 0 for bq_prefix, *_ in FUEL_MAP}
     for r in rows:
         for bq_prefix in price_counts:
@@ -386,6 +389,10 @@ def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
     logger.info("Gold top_stations OK en %.1fs", time.perf_counter() - t2)
 
 
+_MAX_ATTEMPTS = 3
+_RETRY_SLEEP = 60
+
+
 def ingest(request=None):
     """Cloud Function entrypoint."""
     t_start = time.perf_counter()
@@ -395,17 +402,32 @@ def ingest(request=None):
 
     logger.info("=== Début ingestion %s ===", ingested_at)
 
-    content = fetch_csv()
-    file_md5 = _md5(content)
-    logger.info("MD5 : %s", file_md5)
-
     client = bigquery.Client(project=GCP_PROJECT)
 
-    if _log_table_exists(client) and _already_ingested(client, file_md5):
-        logger.info("Déjà ingéré (MD5 %s) — skip", file_md5)
-        return {"status": "skipped", "md5": file_md5}, 200
+    content = None
+    rows = None
+    count = 0
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            content = fetch_csv()
+            file_md5 = _md5(content)
+            logger.info("MD5 : %s", file_md5)
 
-    ensure_infrastructure(client)
+            if _log_table_exists(client) and _already_ingested(client, file_md5):
+                logger.info("Déjà ingéré (MD5 %s) — skip", file_md5)
+                return {"status": "skipped", "md5": file_md5}, 200
+
+            ensure_infrastructure(client)
+
+            rows, count = load_to_bigquery(client, content, ingested_at)
+            break
+        except ValueError as exc:
+            if attempt < _MAX_ATTEMPTS:
+                logger.warning("Tentative %d/%d échouée : %s — relance dans %ds", attempt, _MAX_ATTEMPTS, exc, _RETRY_SLEEP)
+                time.sleep(_RETRY_SLEEP)
+            else:
+                logger.error("Toutes les tentatives ont échoué : %s", exc)
+                raise
 
     gcs_uri = None
     if GCS_BUCKET:
@@ -413,7 +435,6 @@ def ingest(request=None):
     else:
         logger.warning("GCS_BUCKET non défini — upload GCS ignoré")
 
-    rows, count = load_to_bigquery(client, content, ingested_at)
     _record_ingestion(client, file_md5, ingested_at, count, gcs_uri)
 
     _refresh_silver(client, rows)
