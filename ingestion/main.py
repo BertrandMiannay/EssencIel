@@ -1,18 +1,15 @@
-import functools
+import csv
 import hashlib
 import io
 import json
-import os
-import csv
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from google.api_core.exceptions import NotFound
-from google.cloud import bigquery, storage
 
 load_dotenv()
 
@@ -25,14 +22,8 @@ SOURCE_URL = (
     "?delimiter=%3B&lang=fr&timezone=Europe%2FParis&use_labels=true"
 )
 
-GCP_PROJECT = os.environ["GCP_PROJECT"]
+GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
 GCS_BUCKET = os.environ.get("GCS_BUCKET")
-BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
-BQ_TABLE = "raw_snapshots"
-BQ_LOG_TABLE = f"{GCP_PROJECT}.{BQ_DATASET}.raw_ingestion_log"
-BQ_SILVER = f"{GCP_PROJECT}.{BQ_DATASET}.silver_stations_latest"
-BQ_GOLD_ZONE = f"{GCP_PROJECT}.{BQ_DATASET}.gold_prix_moyens_zone"
-BQ_GOLD_TOP = f"{GCP_PROJECT}.{BQ_DATASET}.gold_top_stations"
 
 # (bq_prefix, csv_prix_label, csv_rupture_label)
 FUEL_MAP = [
@@ -55,6 +46,20 @@ CSV_TO_BQ = {
     "horaires détaillés": "horaires",
 }
 
+_SNAPSHOT_UPDATE_FIELDS = [
+    "adresse", "code_postal", "ville", "departement", "region",
+    "latitude", "longitude", "autoroute", "services", "horaires",
+] + [
+    f"{fuel}_{col}"
+    for fuel, *_ in FUEL_MAP
+    for col in ["prix", "maj", "rupture"]
+]
+
+_STATION_FIELDS = [
+    "station_id", "adresse", "ville", "code_postal",
+    "departement", "region", "latitude", "longitude",
+]
+
 
 def _parse_float(value: str) -> float | None:
     if value is None or value.strip() == "":
@@ -70,13 +75,16 @@ def _parse_timestamp(value: str) -> str | None:
         return None
     for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return datetime.strptime(value.strip(), fmt).isoformat()
+            dt = datetime.strptime(value.strip(), fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.isoformat()
         except ValueError:
             continue
     return None
 
 
-def _transform_row(row: dict, ingested_at: str) -> dict:
+def _transform_row(row: dict, ingested_at) -> dict:
     record = {"ingested_at": ingested_at}
 
     for csv_col, bq_col in CSV_TO_BQ.items():
@@ -84,10 +92,8 @@ def _transform_row(row: dict, ingested_at: str) -> dict:
 
     lat_raw = _parse_float(row.get("latitude", ""))
     lng_raw = _parse_float(row.get("longitude", ""))
-    # The API stores coordinates as integers × 100 000 (e.g. 4620516 → 46.20516°)
     record["latitude"] = lat_raw / 100_000 if lat_raw is not None else None
     record["longitude"] = lng_raw / 100_000 if lng_raw is not None else None
-    # pop: "R" = route, "A" = autoroute
     record["autoroute"] = row.get("pop", "").strip() == "A"
 
     for bq_prefix, prix_label, rupture_label in FUEL_MAP:
@@ -109,6 +115,7 @@ def fetch_csv() -> bytes:
 
 
 def upload_to_gcs(content: bytes, date_str: str) -> str:
+    from google.cloud import storage
     t0 = time.perf_counter()
     client = storage.Client(project=GCP_PROJECT)
     bucket = client.bucket(GCS_BUCKET)
@@ -120,129 +127,33 @@ def upload_to_gcs(content: bytes, date_str: str) -> str:
     return gcs_uri
 
 
-@functools.lru_cache(maxsize=None)
-def _bq_schema() -> list[bigquery.SchemaField]:
-    schema_path = Path(__file__).parent / "bigquery" / "schema.json"
-    return [
-        bigquery.SchemaField(f["name"], f["type"], mode=f.get("mode", "NULLABLE"))
-        for f in json.loads(schema_path.read_text())
-    ]
-
-
-def _log_schema() -> list[bigquery.SchemaField]:
-    return [
-        bigquery.SchemaField("file_md5",    "STRING",    mode="REQUIRED"),
-        bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("rows_count",  "INT64",     mode="NULLABLE"),
-        bigquery.SchemaField("gcs_uri",     "STRING",    mode="NULLABLE"),
-    ]
-
-
-def _gold_zone_schema() -> list[bigquery.SchemaField]:
-    fields = [
-        bigquery.SchemaField("ingested_at", "TIMESTAMP", mode="REQUIRED"),
-        bigquery.SchemaField("zone_type",   "STRING",    mode="REQUIRED"),
-        bigquery.SchemaField("zone_value",  "STRING",    mode="REQUIRED"),
-        bigquery.SchemaField("nb_stations", "INT64",     mode="NULLABLE"),
-    ]
-    for bq_prefix, *_ in FUEL_MAP:
-        fields += [
-            bigquery.SchemaField(f"{bq_prefix}_prix_moyen",   "FLOAT64", mode="NULLABLE"),
-            bigquery.SchemaField(f"{bq_prefix}_taux_rupture", "FLOAT64", mode="NULLABLE"),
-        ]
-    return fields
-
-
-def _gold_top_schema() -> list[bigquery.SchemaField]:
-    return [
-        bigquery.SchemaField("zone_type",   "STRING",  mode="REQUIRED"),
-        bigquery.SchemaField("zone_value",  "STRING",  mode="REQUIRED"),
-        bigquery.SchemaField("fuel",        "STRING",  mode="REQUIRED"),
-        bigquery.SchemaField("rank_type",   "STRING",  mode="REQUIRED"),
-        bigquery.SchemaField("rank",        "INT64",   mode="REQUIRED"),
-        bigquery.SchemaField("station_id",  "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("adresse",     "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("ville",       "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("code_postal", "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("departement", "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("region",      "STRING",  mode="NULLABLE"),
-        bigquery.SchemaField("latitude",    "FLOAT64", mode="NULLABLE"),
-        bigquery.SchemaField("longitude",   "FLOAT64", mode="NULLABLE"),
-        bigquery.SchemaField("prix",        "FLOAT64", mode="NULLABLE"),
-    ]
-
-
-
-def _ensure_table(
-    client: bigquery.Client,
-    table_name: str,
-    schema: list[bigquery.SchemaField],
-    partition_field: str | None = None,
-    cluster: list[str] | None = None,
-) -> None:
-    table = bigquery.Table(f"{GCP_PROJECT}.{BQ_DATASET}.{table_name}", schema=schema)
-    if partition_field:
-        table.time_partitioning = bigquery.TimePartitioning(
-            type_=bigquery.TimePartitioningType.DAY,
-            field=partition_field,
-        )
-    if cluster:
-        table.clustering_fields = cluster
-    client.create_table(table, exists_ok=True)
-    logger.info("Table %s.%s OK", BQ_DATASET, table_name)
-
-
-def ensure_infrastructure(client: bigquery.Client) -> None:
-    ds = bigquery.Dataset(f"{GCP_PROJECT}.{BQ_DATASET}")
-    ds.location = "EU"
-    client.create_dataset(ds, exists_ok=True)
-    logger.info("Dataset %s OK", BQ_DATASET)
-
-    _ensure_table(client, BQ_TABLE, _bq_schema(),
-                  partition_field="ingested_at", cluster=["region", "code_postal"])
-    _ensure_table(client, "raw_ingestion_log", _log_schema())
-    _ensure_table(client, "silver_stations_latest", _bq_schema(),
-                  cluster=["region", "code_postal"])
-    _ensure_table(client, "gold_prix_moyens_zone", _gold_zone_schema(),
-                  cluster=["zone_type", "zone_value"])
-    _ensure_table(client, "gold_top_stations", _gold_top_schema(),
-                  cluster=["zone_type", "zone_value", "fuel"])
-
-
 def _md5(content: bytes) -> str:
     return hashlib.md5(content).hexdigest()
 
 
-def _log_table_exists(client: bigquery.Client) -> bool:
-    try:
-        client.get_table(BQ_LOG_TABLE)
-        return True
-    except NotFound:
-        return False
+def _already_ingested(file_md5: str) -> bool:
+    from carburants.models import IngestionLog
+    return IngestionLog.objects.filter(file_md5=file_md5).exists()
 
 
-def _already_ingested(client: bigquery.Client, file_md5: str) -> bool:
-    rows = list(client.query(
-        f"SELECT 1 FROM `{BQ_LOG_TABLE}` WHERE file_md5 = @md5 LIMIT 1",
-        job_config=bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ScalarQueryParameter("md5", "STRING", file_md5)
-        ]),
-    ).result())
-    return len(rows) > 0
+def _record_ingestion(
+    file_md5: str,
+    ingested_at,
+    rows_count: int,
+    gcs_uri: str | None,
+) -> None:
+    from carburants.models import IngestionLog
+    IngestionLog.objects.create(
+        file_md5=file_md5,
+        ingested_at=ingested_at,
+        rows_count=rows_count,
+        gcs_uri=gcs_uri,
+    )
 
 
-def _record_ingestion(client: bigquery.Client, file_md5: str, ingested_at: str, rows_count: int, gcs_uri: str | None) -> None:
-    errors = client.insert_rows_json(BQ_LOG_TABLE, [{
-        "file_md5":    file_md5,
-        "ingested_at": ingested_at,
-        "rows_count":  rows_count,
-        "gcs_uri":     gcs_uri,
-    }])
-    if errors:
-        raise RuntimeError(f"ingestion_log insert errors: {errors}")
-
-
-def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) -> tuple[list[dict], int]:
+def load_to_db(content: bytes, ingested_at) -> tuple[list[dict], int]:
+    """Parse le CSV et insère les snapshots via bulk_create idempotent."""
+    from carburants.models import Snapshot
     t0 = time.perf_counter()
     reader = csv.DictReader(io.StringIO(content.decode("utf-8-sig")), delimiter=";")
     rows = [_transform_row(row, ingested_at) for row in reader]
@@ -259,134 +170,141 @@ def load_to_bigquery(client: bigquery.Client, content: bytes, ingested_at: str) 
     for bq_prefix, count in price_counts.items():
         logger.info("  %-8s %d/%d stations avec prix", bq_prefix, count, len(rows))
 
-    main_table = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}"
-    staging_table = f"{GCP_PROJECT}.{BQ_DATASET}.{BQ_TABLE}_staging"
-
     t1 = time.perf_counter()
-    job = client.load_table_from_json(
-        rows,
-        staging_table,
-        job_config=bigquery.LoadJobConfig(
-            schema=_bq_schema(),
-            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        ),
+    objs = [Snapshot(**r) for r in rows]
+    Snapshot.objects.bulk_create(
+        objs,
+        update_conflicts=True,
+        unique_fields=["station_id", "ingested_at"],
+        update_fields=_SNAPSHOT_UPDATE_FIELDS,
     )
-    job.result()
-    logger.info("Staging chargée : %d lignes en %.1fs", len(rows), time.perf_counter() - t1)
-
-    t2 = time.perf_counter()
-    # MERGE idempotent sur (station_id, ingested_at)
-    client.query(f"""
-        MERGE `{main_table}` T
-        USING `{staging_table}` S
-        ON T.station_id = S.station_id AND T.ingested_at = S.ingested_at
-        WHEN NOT MATCHED THEN INSERT ROW
-    """).result()
-    logger.info("Merge OK en %.1fs → %s", time.perf_counter() - t2, main_table)
-
-    client.delete_table(staging_table)
-    logger.info("Durée totale BQ : %.1fs", time.perf_counter() - t0)
+    logger.info("DB upsert : %d lignes en %.1fs", len(rows), time.perf_counter() - t1)
     return rows, len(rows)
 
 
-def _refresh_silver(client: bigquery.Client, rows: list[dict]) -> None:
+def _refresh_silver(rows: list[dict]) -> None:
+    """Remplace StationsLatest par le snapshot courant (WRITE_TRUNCATE)."""
+    from carburants.models import StationsLatest
     t0 = time.perf_counter()
-    job = client.load_table_from_json(
-        rows,
-        BQ_SILVER,
-        job_config=bigquery.LoadJobConfig(
-            schema=_bq_schema(),
-            write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        ),
-    )
-    job.result()
+    StationsLatest.objects.all().delete()
+    objs = [StationsLatest(**r) for r in rows]
+    StationsLatest.objects.bulk_create(objs)
     logger.info("Silver stations_latest : %d lignes en %.1fs", len(rows), time.perf_counter() - t0)
 
 
-def _fuel_zone_agg(fuel: str) -> str:
-    return (
-        f"ROUND(AVG(IF({fuel}_rupture IS FALSE AND {fuel}_prix IS NOT NULL, {fuel}_prix, NULL)), 3) AS {fuel}_prix_moyen"
-        f", ROUND(COUNTIF({fuel}_rupture IS TRUE) / COUNT(*), 4) AS {fuel}_taux_rupture"
-    )
+def _refresh_gold(rows: list[dict], ingested_at) -> None:
+    """Recalcule PrixMoyensZone et TopStations à partir de StationsLatest."""
+    from carburants.models import PrixMoyensZone, StationsLatest, TopStations
+    from django.db.models import Avg, Count, Q
 
-
-
-def _refresh_gold(client: bigquery.Client, ingested_at: str) -> None:
     t0 = time.perf_counter()
     fuels = [bq_prefix for bq_prefix, *_ in FUEL_MAP]
-    ts_param = bigquery.ScalarQueryParameter("ingested_at", "TIMESTAMP", ingested_at)
 
-    fuel_zone_cols = ", ".join(_fuel_zone_agg(f) for f in fuels)
+    # ── PrixMoyensZone (WRITE_TRUNCATE) ──────────────────────────────────────
+    PrixMoyensZone.objects.all().delete()
 
-    prix_moyens_sql = f"""
-    SELECT @ingested_at AS ingested_at, 'france' AS zone_type, '' AS zone_value,
-      COUNT(*) AS nb_stations, {fuel_zone_cols}
-    FROM `{BQ_SILVER}`
+    zone_configs = [
+        ("france",      None),
+        ("region",      "region"),
+        ("departement", "departement"),
+        ("code_postal", "code_postal"),
+    ]
 
-    UNION ALL
+    gold_zone_objs = []
+    for zone_type, group_field in zone_configs:
+        base_qs = StationsLatest.objects.all()
+        if group_field:
+            zone_values = list(
+                base_qs.exclude(**{group_field: None})
+                .values_list(group_field, flat=True)
+                .distinct()
+            )
+        else:
+            zone_values = [""]
 
-    SELECT @ingested_at, 'region', region, COUNT(*), {fuel_zone_cols}
-    FROM `{BQ_SILVER}` WHERE region IS NOT NULL GROUP BY region
+        for zone_value in zone_values:
+            qs = base_qs.filter(**{group_field: zone_value}) if group_field else base_qs
 
-    UNION ALL
+            agg_kwargs = {"nb": Count("id")}
+            for f in fuels:
+                agg_kwargs[f"{f}_pm"] = Avg(
+                    f"{f}_prix",
+                    filter=Q(**{f"{f}_rupture": False}) & Q(**{f"{f}_prix__isnull": False}),
+                )
+                agg_kwargs[f"{f}_nr"] = Count("id", filter=Q(**{f"{f}_rupture": True}))
 
-    SELECT @ingested_at, 'departement', departement, COUNT(*), {fuel_zone_cols}
-    FROM `{BQ_SILVER}` WHERE departement IS NOT NULL GROUP BY departement
+            result = qs.aggregate(**agg_kwargs)
+            nb = result["nb"] or 1
 
-    UNION ALL
+            obj = PrixMoyensZone(
+                ingested_at=ingested_at,
+                zone_type=zone_type,
+                zone_value=zone_value,
+                nb_stations=result["nb"],
+            )
+            for f in fuels:
+                pm = result[f"{f}_pm"]
+                setattr(obj, f"{f}_prix_moyen", round(pm, 3) if pm is not None else None)
+                setattr(obj, f"{f}_taux_rupture", round(result[f"{f}_nr"] / nb, 4))
+            gold_zone_objs.append(obj)
 
-    SELECT @ingested_at, 'code_postal', code_postal, COUNT(*), {fuel_zone_cols}
-    FROM `{BQ_SILVER}` WHERE code_postal IS NOT NULL GROUP BY code_postal
-    """
+    PrixMoyensZone.objects.bulk_create(gold_zone_objs)
+    logger.info("Gold prix_moyens_zone : %d lignes en %.1fs",
+                len(gold_zone_objs), time.perf_counter() - t0)
 
-    client.query(prix_moyens_sql, job_config=bigquery.QueryJobConfig(
-        destination=BQ_GOLD_ZONE,
-        write_disposition=bigquery.WriteDisposition.WRITE_TRUNCATE,
-        query_parameters=[ts_param],
-    )).result()
-    logger.info("Gold prix_moyens_zone OK en %.1fs", time.perf_counter() - t0)
-
+    # ── TopStations (TRUNCATE + INSERT) ──────────────────────────────────────
     t2 = time.perf_counter()
-    station_cols = "station_id, adresse, ville, code_postal, departement, region, latitude, longitude"
+    TopStations.objects.all().delete()
 
-    client.query(f"TRUNCATE TABLE `{BQ_GOLD_TOP}`").result()
+    top_objs = []
+    silver_all = StationsLatest.objects.all()
 
-    jobs = []
-    for fuel in fuels:
-        sql = f"""
-        WITH base AS (
-          SELECT {station_cols}, {fuel}_prix AS prix
-          FROM `{BQ_SILVER}`
-          WHERE {fuel}_prix IS NOT NULL AND {fuel}_rupture IS FALSE
-        ),
-        zones AS (
-          SELECT {station_cols}, prix, 'france' AS zone_type, '' AS zone_value FROM base
-          UNION ALL
-          SELECT {station_cols}, prix, 'region', region FROM base WHERE region IS NOT NULL
-          UNION ALL
-          SELECT {station_cols}, prix, 'departement', departement FROM base WHERE departement IS NOT NULL
-        ),
-        ranked AS (
-          SELECT *,
-            ROW_NUMBER() OVER (PARTITION BY zone_type, zone_value ORDER BY prix ASC)  AS rn_asc,
-            ROW_NUMBER() OVER (PARTITION BY zone_type, zone_value ORDER BY prix DESC) AS rn_desc
-          FROM zones
+    zone_scope = [
+        ("france",      None),
+        ("region",      "region"),
+        ("departement", "departement"),
+    ]
+
+    for bq_prefix, *_ in FUEL_MAP:
+        fuel_qs = silver_all.filter(
+            **{f"{bq_prefix}_prix__isnull": False, f"{bq_prefix}_rupture": False}
         )
-        SELECT zone_type, zone_value, '{fuel}' AS fuel, 'top' AS rank_type, rn_asc AS rank, {station_cols}, prix
-        FROM ranked WHERE rn_asc <= 10
-        UNION ALL
-        SELECT zone_type, zone_value, '{fuel}', 'worst', rn_desc, {station_cols}, prix
-        FROM ranked WHERE rn_desc <= 10
-        """
-        jobs.append(client.query(sql, job_config=bigquery.QueryJobConfig(
-            destination=BQ_GOLD_TOP,
-            write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
-        )))
+        for zone_type, group_field in zone_scope:
+            if group_field:
+                zone_values = list(
+                    fuel_qs.exclude(**{group_field: None})
+                    .values_list(group_field, flat=True)
+                    .distinct()
+                )
+            else:
+                zone_values = [""]
 
-    for job in jobs:
-        job.result()
+            for zone_value in zone_values:
+                scoped = (
+                    fuel_qs.filter(**{group_field: zone_value})
+                    if group_field
+                    else fuel_qs
+                )
+                for rank_type, order_field in [
+                    ("top",   f"{bq_prefix}_prix"),
+                    ("worst", f"-{bq_prefix}_prix"),
+                ]:
+                    for rank, station in enumerate(scoped.order_by(order_field)[:10], start=1):
+                        top_objs.append(
+                            TopStations(
+                                zone_type=zone_type,
+                                zone_value=zone_value,
+                                fuel=bq_prefix,
+                                rank_type=rank_type,
+                                rank=rank,
+                                **{f: getattr(station, f) for f in _STATION_FIELDS},
+                                prix=getattr(station, f"{bq_prefix}_prix"),
+                            )
+                        )
 
-    logger.info("Gold top_stations OK en %.1fs", time.perf_counter() - t2)
+    TopStations.objects.bulk_create(top_objs)
+    logger.info("Gold top_stations : %d lignes en %.1fs",
+                len(top_objs), time.perf_counter() - t2)
 
 
 _MAX_ATTEMPTS = 3
@@ -394,36 +312,35 @@ _RETRY_SLEEP = 60
 
 
 def ingest(request=None):
-    """Cloud Function entrypoint."""
+    """Entrypoint principal (management command ou standalone)."""
     t_start = time.perf_counter()
     now = datetime.now(timezone.utc)
-    ingested_at = now.isoformat()
     date_str = now.strftime("%Y-%m-%d")
 
-    logger.info("=== Début ingestion %s ===", ingested_at)
-
-    client = bigquery.Client(project=GCP_PROJECT)
+    logger.info("=== Début ingestion %s ===", now.isoformat())
 
     content = None
     rows = None
     count = 0
+    file_md5 = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             content = fetch_csv()
             file_md5 = _md5(content)
             logger.info("MD5 : %s", file_md5)
 
-            if _log_table_exists(client) and _already_ingested(client, file_md5):
+            if _already_ingested(file_md5):
                 logger.info("Déjà ingéré (MD5 %s) — skip", file_md5)
                 return {"status": "skipped", "md5": file_md5}, 200
 
-            ensure_infrastructure(client)
-
-            rows, count = load_to_bigquery(client, content, ingested_at)
+            rows, count = load_to_db(content, now)
             break
         except ValueError as exc:
             if attempt < _MAX_ATTEMPTS:
-                logger.warning("Tentative %d/%d échouée : %s — relance dans %ds", attempt, _MAX_ATTEMPTS, exc, _RETRY_SLEEP)
+                logger.warning(
+                    "Tentative %d/%d échouée : %s — relance dans %ds",
+                    attempt, _MAX_ATTEMPTS, exc, _RETRY_SLEEP,
+                )
                 time.sleep(_RETRY_SLEEP)
             else:
                 logger.error("Toutes les tentatives ont échoué : %s", exc)
@@ -435,10 +352,10 @@ def ingest(request=None):
     else:
         logger.warning("GCS_BUCKET non défini — upload GCS ignoré")
 
-    _record_ingestion(client, file_md5, ingested_at, count, gcs_uri)
+    _record_ingestion(file_md5, now, count, gcs_uri)
 
-    _refresh_silver(client, rows)
-    _refresh_gold(client, ingested_at)
+    _refresh_silver(rows)
+    _refresh_gold(rows, now)
 
     elapsed = time.perf_counter() - t_start
     logger.info("=== Ingestion terminée : %d lignes en %.1fs ===", count, elapsed)
@@ -446,5 +363,12 @@ def ingest(request=None):
 
 
 if __name__ == "__main__":
+    import sys
+    import django
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web"))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    django.setup()
+
     result, status = ingest()
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, default=str))

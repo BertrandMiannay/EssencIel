@@ -1,7 +1,8 @@
-"""Tests unitaires pour ingestion/main.py — transformations CSV et pipeline BigQuery."""
+"""Tests unitaires pour ingestion/main.py — transformations CSV et pipeline DB."""
 import io
 import csv
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -11,7 +12,7 @@ from ingestion.main import (
     _transform_row,
     _md5,
     _already_ingested,
-    load_to_bigquery,
+    load_to_db,
     ingest,
 )
 
@@ -64,17 +65,6 @@ def _make_csv(rows: list[dict]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return buf.getvalue().encode("utf-8")
-
-
-def _mock_bq_client() -> MagicMock:
-    """Client BigQuery minimal pour les tests de pipeline."""
-    client = MagicMock()
-    job = MagicMock()
-    job.result.return_value = None
-    client.load_table_from_json.return_value = job
-    client.query.return_value = job
-    client.insert_rows_json.return_value = []
-    return client
 
 
 # ── _parse_float ──────────────────────────────────────────────────────────────
@@ -136,7 +126,7 @@ class TestParseTimestamp:
 
 
 class TestTransformRow:
-    TS = "2024-01-15T08:00:00+00:00"
+    TS = datetime(2024, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
 
     def test_cas_nominal_champs_de_base(self):
         result = _transform_row(_station(), self.TS)
@@ -228,72 +218,74 @@ def test_md5_valeur_connue():
 # ── _already_ingested ─────────────────────────────────────────────────────────
 
 
+@pytest.mark.django_db
 def test_already_ingested_retourne_true_si_md5_connu():
-    client = MagicMock()
-    client.query.return_value.result.return_value = [MagicMock()]
-    assert _already_ingested(client, "abc123") is True
+    from carburants.models import IngestionLog
+    IngestionLog.objects.create(
+        file_md5="abc123",
+        ingested_at=datetime.now(timezone.utc),
+        rows_count=1,
+    )
+    assert _already_ingested("abc123") is True
 
 
+@pytest.mark.django_db
 def test_already_ingested_retourne_false_si_md5_inconnu():
-    client = MagicMock()
-    client.query.return_value.result.return_value = []
-    assert _already_ingested(client, "abc123") is False
+    assert _already_ingested("abc123") is False
 
 
-# ── load_to_bigquery ──────────────────────────────────────────────────────────
+# ── load_to_db ────────────────────────────────────────────────────────────────
 
 
-class TestLoadToBigquery:
-    TS = "2024-01-15T08:00:00+00:00"
+class TestLoadToDb:
+    TS = datetime(2024, 1, 15, 8, 0, 0, tzinfo=timezone.utc)
 
+    @pytest.mark.django_db
     def test_cas_nominal_une_ligne(self):
-        client = _mock_bq_client()
-        rows, count = load_to_bigquery(client, _make_csv([_station()]), self.TS)
+        from carburants.models import Snapshot
+        rows, count = load_to_db(_make_csv([_station()]), self.TS)
 
         assert count == 1
         assert len(rows) == 1
-        client.load_table_from_json.assert_called_once()
-        client.delete_table.assert_called_once()
+        assert Snapshot.objects.count() == 1
 
-    def test_merge_idempotent_execute(self):
-        """Un MERGE doit être lancé sur (station_id, ingested_at) après le staging."""
-        client = _mock_bq_client()
-        load_to_bigquery(client, _make_csv([_station()]), self.TS)
+    @pytest.mark.django_db
+    def test_idempotent_double_appel(self):
+        """Appeler load_to_db deux fois avec le même contenu ne duplique pas les lignes."""
+        from carburants.models import Snapshot
+        csv_bytes = _make_csv([_station()])
+        load_to_db(csv_bytes, self.TS)
+        load_to_db(csv_bytes, self.TS)
 
-        queries_sql = [str(c.args[0]) for c in client.query.call_args_list]
-        assert any("MERGE" in q for q in queries_sql)
+        assert Snapshot.objects.count() == 1
 
-    def test_staging_supprime_apres_merge(self):
-        """La table de staging doit être purgée même si une seule ligne est chargée."""
-        client = _mock_bq_client()
-        load_to_bigquery(client, _make_csv([_station()]), self.TS)
-
-        client.delete_table.assert_called_once()
-
+    @pytest.mark.django_db
     def test_plusieurs_lignes(self):
+        from carburants.models import Snapshot
         stations = [_station(id=str(i)) for i in range(5)]
-        client = _mock_bq_client()
-        rows, count = load_to_bigquery(client, _make_csv(stations), self.TS)
+        rows, count = load_to_db(_make_csv(stations), self.TS)
 
         assert count == 5
+        assert Snapshot.objects.count() == 5
 
+    @pytest.mark.django_db
     def test_schema_different_colonnes_supplementaires(self):
         """Des colonnes inconnues dans le CSV ne doivent pas bloquer le chargement."""
+        from carburants.models import Snapshot
         row = _station()
         row["colonne_inattendue"] = "x"
-        client = _mock_bq_client()
-        rows, count = load_to_bigquery(client, _make_csv([row]), self.TS)
+        rows, count = load_to_db(_make_csv([row]), self.TS)
 
         assert count == 1
+        assert Snapshot.objects.count() == 1
 
-    def test_csv_vide_zero_lignes(self):
-        """Un CSV sans données (header seulement) doit charger 0 lignes sans erreur."""
+    @pytest.mark.django_db
+    def test_csv_vide_zero_lignes_leve_erreur(self):
+        """Un CSV sans données (header seulement) doit lever ValueError."""
         headers = list(_station().keys())
         csv_bytes = (";".join(headers) + "\n").encode("utf-8")
-        client = _mock_bq_client()
-        rows, count = load_to_bigquery(client, csv_bytes, self.TS)
-
-        assert count == 0
+        with pytest.raises(ValueError, match="CSV vide"):
+            load_to_db(csv_bytes, self.TS)
 
 
 # ── ingest — orchestration complète ──────────────────────────────────────────
@@ -303,39 +295,45 @@ class TestIngest:
     def _csv(self):
         return _make_csv([_station()])
 
-    @patch("ingestion.main._log_table_exists", return_value=True)
-    @patch("ingestion.main._already_ingested", return_value=True)
+    @pytest.mark.django_db
     @patch("ingestion.main.fetch_csv")
-    def test_skip_si_md5_deja_connu(self, mock_fetch, _mock_already, _mock_log):
-        mock_fetch.return_value = self._csv()
-        with patch("ingestion.main.bigquery.Client"):
-            result, code = ingest()
+    def test_skip_si_md5_deja_connu(self, mock_fetch):
+        from carburants.models import IngestionLog
+        csv_bytes = self._csv()
+        mock_fetch.return_value = csv_bytes
+        file_md5 = _md5(csv_bytes)
+        IngestionLog.objects.create(
+            file_md5=file_md5,
+            ingested_at=datetime.now(timezone.utc),
+            rows_count=1,
+        )
+
+        result, code = ingest()
 
         assert code == 200
         assert result["status"] == "skipped"
 
-    @patch("ingestion.main._log_table_exists", return_value=False)
+    @pytest.mark.django_db
+    @patch("ingestion.main.GCS_BUCKET", None)
     @patch("ingestion.main.fetch_csv")
-    @patch("ingestion.main.bigquery.Client")
-    @patch("ingestion.main.upload_to_gcs", return_value="gs://bucket/raw/2024-01-15/carburants.csv")
-    def test_cas_nominal(self, _mock_gcs, mock_bq_cls, mock_fetch, _mock_log):
+    def test_cas_nominal(self, mock_fetch):
+        from carburants.models import IngestionLog, Snapshot
         mock_fetch.return_value = self._csv()
-        mock_bq_cls.return_value = _mock_bq_client()
 
         result, code = ingest()
 
         assert code == 200
         assert result["status"] == "ok"
         assert result["rows"] == 1
+        assert Snapshot.objects.count() == 1
+        assert IngestionLog.objects.count() == 1
 
+    @pytest.mark.django_db
     @patch("ingestion.main.GCS_BUCKET", None)
-    @patch("ingestion.main._log_table_exists", return_value=False)
     @patch("ingestion.main.fetch_csv")
-    @patch("ingestion.main.bigquery.Client")
-    def test_pipeline_sans_gcs(self, mock_bq_cls, mock_fetch, _mock_log):
+    def test_pipeline_sans_gcs(self, mock_fetch):
         """L'ingestion doit continuer si GCS_BUCKET n'est pas configuré."""
         mock_fetch.return_value = self._csv()
-        mock_bq_cls.return_value = _mock_bq_client()
 
         result, code = ingest()
 

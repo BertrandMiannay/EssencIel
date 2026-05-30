@@ -11,6 +11,7 @@ DEBUG = os.environ.get("DEBUG", "True") == "True"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 INSTALLED_APPS = [
+    "django.contrib.contenttypes",
     "django.contrib.staticfiles",
     "rest_framework",
     "carburants",
@@ -41,9 +42,21 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# BigQuery
+USE_TZ = True
+
+DATABASES = {
+    "default": {
+        "ENGINE":   os.environ.get("DB_ENGINE",   "django.db.backends.sqlite3"),
+        "NAME":     os.environ.get("DB_NAME",     str(BASE_DIR / "db.sqlite3")),
+        "USER":     os.environ.get("DB_USER",     ""),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST":     os.environ.get("DB_HOST",     ""),
+        "PORT":     os.environ.get("DB_PORT",     ""),
+    }
+}
+
+# GCP (optionnel — uniquement pour le backup GCS)
 GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
-BQ_DATASET = os.environ.get("BQ_DATASET", "carburants")
 
 LOGGING = {
     "version": 1,
